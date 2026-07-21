@@ -109,10 +109,12 @@ api.post('/setup/sync', async (req, res) => {
 });
 
 // One-time setup: register webhook subscriptions.
+// APP_URL is optional — default to the host this request came in on (Railway
+// sets x-forwarded-host), so there's one less env var to misconfigure.
 api.post('/setup/webhooks', async (req, res) => {
   try {
-    const appUrl = process.env.APP_URL;
-    if (!appUrl) return res.status(400).json({ error: 'APP_URL not set' });
+    const appUrl = process.env.APP_URL
+      || `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
     const results = await registerAll({ shop: req.ctx.shop, token: req.ctx.token }, appUrl);
     await setState('webhooks_registered', { at: new Date().toISOString(), results });
     res.json({ results });

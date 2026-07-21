@@ -61,12 +61,22 @@ async function viewDashboard() {
       <h2>账本时间范围</h2>
       <p>${s.ledger.first ? `${fmtDate(s.ledger.first)} → ${fmtDate(s.ledger.last)}` : '暂无流水（等第一笔库存变动进来）'}</p>
     </div>`;
-  $('#btn-sync').onclick = async (e) => { e.target.disabled = true; await api('/setup/sync', { method: 'POST' }); setTimeout(viewDashboard, 1500); };
-  $('#btn-webhooks').onclick = async (e) => { e.target.disabled = true; await api('/setup/webhooks', { method: 'POST' }); viewDashboard(); };
-  $('#btn-snapshot').onclick = async (e) => {
-    e.target.disabled = true; e.target.textContent = '快照运行中…（可能几分钟）';
-    try { await api('/jobs/snapshot', { method: 'POST' }); } finally { viewDashboard(); }
+  const guard = (fn) => async (e) => {
+    e.target.disabled = true;
+    try { await fn(e); }
+    catch (err) { alert(`操作失败：${err.message}`); e.target.disabled = false; }
   };
+  $('#btn-sync').onclick = guard(async () => { await api('/setup/sync', { method: 'POST' }); setTimeout(viewDashboard, 1500); });
+  $('#btn-webhooks').onclick = guard(async () => {
+    const { results } = await api('/setup/webhooks', { method: 'POST' });
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length) alert(`部分 topic 注册失败：\n${failed.map((f) => `${f.topic}: ${JSON.stringify(f.errors)}`).join('\n')}`);
+    viewDashboard();
+  });
+  $('#btn-snapshot').onclick = guard(async (e) => {
+    e.target.textContent = '快照运行中…（可能几分钟）';
+    try { await api('/jobs/snapshot', { method: 'POST' }); } finally { viewDashboard(); }
+  });
 }
 
 async function viewItems() {
