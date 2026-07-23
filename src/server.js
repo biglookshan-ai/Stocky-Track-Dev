@@ -145,7 +145,7 @@ function continueHistoryBackfill(ctx) {
 
 api.get('/status', async (req, res) => {
   try {
-    const [items, events, ledger, backlog, pending, alerts, reasons, recentItems] = await Promise.all([
+    const [items, events, ledger, backlog, pending, alerts, reasons] = await Promise.all([
       q(`SELECT count(*)::int n, count(*) FILTER (WHERE source='local')::int local FROM items WHERE status <> 'deleted'`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_events`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_ledger`),
@@ -153,37 +153,6 @@ api.get('/status', async (req, res) => {
       q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
       q('SELECT count(*)::int n FROM reconcile_alerts WHERE NOT resolved'),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
-      q(`WITH event_items AS (
-           SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
-                  e.staff_name, e.app_name, e.source_type,
-                  sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
-                  sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
-                  string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
-           FROM inventory_events e
-           JOIN inventory_ledger lg ON lg.event_id=e.id
-           JOIN locations loc ON loc.id=lg.location_id
-           WHERE e.occurred_at >= now() - interval '3 days'
-           GROUP BY lg.item_id, e.id
-         ),
-         latest AS (
-           SELECT DISTINCT ON (item_id) *
-           FROM event_items ORDER BY item_id, occurred_at DESC, event_id DESC
-         ),
-         stock AS (
-           SELECT item_id, COALESCE(sum(available), 0)::int AS total_available
-           FROM current_levels GROUP BY item_id
-         )
-         SELECT i.id, i.product_title, i.variant_title, i.sku, i.vendor,
-                latest.occurred_at, latest.activity, latest.staff_name,
-                latest.app_name, latest.source_type, latest.available_delta,
-                latest.on_hand_delta, latest.locations,
-                COALESCE(stock.total_available, 0)::int AS total_available
-         FROM latest
-         JOIN items i ON i.id=latest.item_id
-         LEFT JOIN stock ON stock.item_id=i.id
-         WHERE i.status <> 'deleted'
-         ORDER BY latest.occurred_at DESC
-         LIMIT 20`),
     ]);
     const historySync = await getState('inventory_history_sync');
     let historyBackfill = await getState('inventory_history_backfill');
@@ -206,7 +175,6 @@ api.get('/status', async (req, res) => {
       pendingAttribution: pending.rows[0].n,
       openAlerts: alerts.rows[0].n,
       reasons: reasons.rows[0].n,
-      recentItems: recentItems.rows,
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
       snapshotError: await getState('last_snapshot_error'),
@@ -215,6 +183,50 @@ api.get('/status', async (req, res) => {
       webhooksRegistered: await getState('webhooks_registered'),
       staff: req.ctx.staff,
       shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.get('/recent-items', async (req, res) => {
+  try {
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(20, Math.max(5, Number(req.query.limit || 10)));
+    const result = await q(`WITH event_items AS (
+         SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
+                e.staff_name, e.app_name, e.source_type,
+                sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+                sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
+                string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
+         FROM inventory_events e
+         JOIN inventory_ledger lg ON lg.event_id=e.id
+         JOIN locations loc ON loc.id=lg.location_id
+         WHERE e.occurred_at >= now() - interval '3 days'
+         GROUP BY lg.item_id, e.id
+       ),
+       latest AS (
+         SELECT DISTINCT ON (item_id) *
+         FROM event_items ORDER BY item_id, occurred_at DESC, event_id DESC
+       ),
+       stock AS (
+         SELECT item_id, COALESCE(sum(available), 0)::int AS total_available
+         FROM current_levels GROUP BY item_id
+       )
+       SELECT i.id, i.product_title, i.variant_title, i.sku, i.barcode, i.vendor,
+              latest.occurred_at, latest.activity, latest.staff_name,
+              latest.app_name, latest.source_type, latest.available_delta,
+              latest.on_hand_delta, latest.locations,
+              COALESCE(stock.total_available, 0)::int AS total_available,
+              count(*) OVER()::int AS total
+       FROM latest
+       JOIN items i ON i.id=latest.item_id
+       LEFT JOIN stock ON stock.item_id=i.id
+       WHERE i.status <> 'deleted'
+       ORDER BY latest.occurred_at DESC
+       LIMIT $1 OFFSET $2`, [pageSize, (page - 1) * pageSize]);
+    const total = result.rows[0]?.total || 0;
+    res.json({
+      rows: result.rows.map(({ total: _total, ...row }) => row),
+      total, page, pageSize,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -604,6 +616,7 @@ api.get('/history', async (req, res) => {
                 min(i.product_title) AS product_title,
                 min(i.variant_title) AS variant_title,
                 min(i.sku) AS sku,
+                min(i.barcode) AS barcode,
                 string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
          FROM inventory_events e
          JOIN inventory_ledger lg ON lg.event_id=e.id
@@ -620,11 +633,53 @@ api.get('/history', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+api.get('/history/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const [event, lines] = await Promise.all([
+      q(`SELECT * FROM inventory_events WHERE id=$1`, [id]),
+      q(`SELECT i.id AS item_id, i.product_title, i.variant_title,
+                i.barcode, i.sku, i.vendor, loc.name AS location,
+                sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+                (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
+                  FILTER (WHERE lg.state='available'))[1]::int AS available_after,
+                sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
+                (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
+                  FILTER (WHERE lg.state='on_hand'))[1]::int AS on_hand_after,
+                sum(lg.delta) FILTER (WHERE lg.state='committed')::int AS committed_delta,
+                (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
+                  FILTER (WHERE lg.state='committed'))[1]::int AS committed_after,
+                sum(lg.delta) FILTER (WHERE lg.state='incoming')::int AS incoming_delta,
+                (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
+                  FILTER (WHERE lg.state='incoming'))[1]::int AS incoming_after
+         FROM inventory_ledger lg
+         JOIN items i ON i.id=lg.item_id
+         JOIN locations loc ON loc.id=lg.location_id
+         WHERE lg.event_id=$1
+         GROUP BY i.id, loc.id, loc.name
+         ORDER BY i.barcode, i.product_title, i.variant_title, loc.name`, [id]),
+    ]);
+    if (!event.rowCount) return res.status(404).json({ error: '修改记录不存在' });
+    const rows = lines.rows.map((row) => ({
+      ...row,
+      unavailable_delta: row.on_hand_delta === null && row.available_delta === null
+        ? null : Number(row.on_hand_delta || 0) - Number(row.available_delta || 0),
+      unavailable_after: row.on_hand_after === null || row.available_after === null
+        ? null : Number(row.on_hand_after) - Number(row.available_after),
+    }));
+    res.json({
+      event: event.rows[0],
+      rows,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 api.get('/alerts', async (req, res) => {
   try {
     const rows = await q(`
       SELECT ra.id, ra.snap_date, ra.state, ra.expected, ra.actual, ra.created_at,
-             i.id AS item_id, i.product_title, i.variant_title, i.sku,
+             i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode,
              i.shopify_product_gid, loc.name AS location
       FROM reconcile_alerts ra
       JOIN items i ON i.id=ra.item_id
