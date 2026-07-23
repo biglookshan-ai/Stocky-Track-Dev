@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { initDb, q, getState, setState, withLock } from './db.js';
 import { requireSession } from './auth-embedded.js';
-import { offlineCtx } from './shopify.js';
+import { graphql, offlineCtx } from './shopify.js';
 import { initialSync } from './catalog.js';
 import { receive as receiveWebhook, processPending, registerAll, listSubscriptions } from './webhooks.js';
 import { runAttribution } from './attribution.js';
@@ -24,6 +24,53 @@ if (fs.existsSync(envPath)) {
 
 const API_KEY = process.env.SHOPIFY_API_KEY || '';
 const app = express();
+const collectionCache = new Map();
+let collectionOptionsCache = { expiresAt: 0, rows: [] };
+
+async function listCollectionOptions(ctx) {
+  if (collectionOptionsCache.expiresAt > Date.now()) return collectionOptionsCache.rows;
+  const rows = [];
+  let cursor = null;
+  for (;;) {
+    const data = await graphql(ctx, `
+      query($cursor: String) {
+        collections(first: 250, after: $cursor, sortKey: TITLE) {
+          pageInfo { hasNextPage endCursor }
+          nodes { id title handle }
+        }
+      }`, { cursor });
+    rows.push(...data.collections.nodes);
+    if (!data.collections.pageInfo.hasNextPage) break;
+    cursor = data.collections.pageInfo.endCursor;
+  }
+  collectionOptionsCache = { expiresAt: Date.now() + 10 * 60 * 1000, rows };
+  return rows;
+}
+
+async function collectionProductGids(ctx, collectionId) {
+  const cached = collectionCache.get(collectionId);
+  if (cached?.expiresAt > Date.now()) return cached.rows;
+  const rows = [];
+  let cursor = null;
+  for (;;) {
+    const data = await graphql(ctx, `
+      query($id: ID!, $cursor: String) {
+        collection(id: $id) {
+          products(first: 250, after: $cursor, sortKey: COLLECTION_DEFAULT) {
+            pageInfo { hasNextPage endCursor }
+            nodes { id }
+          }
+        }
+      }`, { id: collectionId, cursor });
+    const products = data.collection?.products;
+    if (!products) break;
+    rows.push(...products.nodes.map((product) => product.id));
+    if (!products.pageInfo.hasNextPage) break;
+    cursor = products.pageInfo.endCursor;
+  }
+  collectionCache.set(collectionId, { expiresAt: Date.now() + 10 * 60 * 1000, rows });
+  return rows;
+}
 
 // Webhooks need the raw body for HMAC; capture it before JSON parsing.
 app.use(express.json({
@@ -98,7 +145,7 @@ function continueHistoryBackfill(ctx) {
 
 api.get('/status', async (req, res) => {
   try {
-    const [items, events, ledger, backlog, pending, alerts, reasons] = await Promise.all([
+    const [items, events, ledger, backlog, pending, alerts, reasons, recentItems] = await Promise.all([
       q(`SELECT count(*)::int n, count(*) FILTER (WHERE source='local')::int local FROM items WHERE status <> 'deleted'`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_events`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_ledger`),
@@ -106,6 +153,37 @@ api.get('/status', async (req, res) => {
       q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
       q('SELECT count(*)::int n FROM reconcile_alerts WHERE NOT resolved'),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
+      q(`WITH event_items AS (
+           SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
+                  e.staff_name, e.app_name, e.source_type,
+                  sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+                  sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
+                  string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
+           FROM inventory_events e
+           JOIN inventory_ledger lg ON lg.event_id=e.id
+           JOIN locations loc ON loc.id=lg.location_id
+           WHERE e.occurred_at >= now() - interval '3 days'
+           GROUP BY lg.item_id, e.id
+         ),
+         latest AS (
+           SELECT DISTINCT ON (item_id) *
+           FROM event_items ORDER BY item_id, occurred_at DESC, event_id DESC
+         ),
+         stock AS (
+           SELECT item_id, COALESCE(sum(available), 0)::int AS total_available
+           FROM current_levels GROUP BY item_id
+         )
+         SELECT i.id, i.product_title, i.variant_title, i.sku, i.vendor,
+                latest.occurred_at, latest.activity, latest.staff_name,
+                latest.app_name, latest.source_type, latest.available_delta,
+                latest.on_hand_delta, latest.locations,
+                COALESCE(stock.total_available, 0)::int AS total_available
+         FROM latest
+         JOIN items i ON i.id=latest.item_id
+         LEFT JOIN stock ON stock.item_id=i.id
+         WHERE i.status <> 'deleted'
+         ORDER BY latest.occurred_at DESC
+         LIMIT 20`),
     ]);
     const historySync = await getState('inventory_history_sync');
     let historyBackfill = await getState('inventory_history_backfill');
@@ -128,6 +206,7 @@ api.get('/status', async (req, res) => {
       pendingAttribution: pending.rows[0].n,
       openAlerts: alerts.rows[0].n,
       reasons: reasons.rows[0].n,
+      recentItems: recentItems.rows,
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
       snapshotError: await getState('last_snapshot_error'),
@@ -135,6 +214,7 @@ api.get('/status', async (req, res) => {
       historyBackfill,
       webhooksRegistered: await getState('webhooks_registered'),
       staff: req.ctx.staff,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -234,23 +314,105 @@ api.post('/jobs/history', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Items list/search with current levels.
+api.get('/item-options', async (req, res) => {
+  try {
+    const [vendors, collections] = await Promise.all([
+      q(`SELECT DISTINCT vendor FROM items
+         WHERE status <> 'deleted' AND vendor <> ''
+         ORDER BY lower(vendor)`),
+      listCollectionOptions({ shop: req.ctx.shop, token: req.ctx.token }),
+    ]);
+    res.json({ vendors: vendors.rows.map((row) => row.vendor), collections });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Items list/search with business filters, inventory totals and last change.
 api.get('/items', async (req, res) => {
   try {
     const term = String(req.query.q || '').trim().slice(0, 80);
+    const vendor = String(req.query.vendor || '').trim().slice(0, 120);
+    const collection = String(req.query.collection || '').trim().slice(0, 120);
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(100, Math.max(20, Number(req.query.limit || 50)));
+    const sort = String(req.query.sort || 'updated_desc');
     const args = [];
-    let cond = `i.status <> 'deleted'`;
+    const filters = [`i.status <> 'deleted'`];
+    const add = (value) => {
+      args.push(value);
+      return `$${args.length}`;
+    };
     if (term) {
-      args.push(`%${term}%`);
-      cond += ` AND (i.product_title ILIKE $1 OR i.variant_title ILIKE $1 OR i.sku ILIKE $1 OR i.barcode ILIKE $1 OR i.vendor ILIKE $1)`;
+      const param = add(`%${term}%`);
+      filters.push(`(i.product_title ILIKE ${param} OR i.variant_title ILIKE ${param}
+        OR i.sku ILIKE ${param} OR i.barcode ILIKE ${param} OR i.vendor ILIKE ${param})`);
     }
-    const r = await q(`
-      SELECT i.id, i.product_title, i.variant_title, i.sku, i.barcode, i.vendor, i.price, i.source,
-             COALESCE(SUM(cl.available), 0)::int total_available
-      FROM items i LEFT JOIN current_levels cl ON cl.item_id = i.id
-      WHERE ${cond}
-      GROUP BY i.id ORDER BY i.product_title, i.variant_title LIMIT 100`, args);
-    res.json({ rows: r.rows });
+    if (vendor) filters.push(`i.vendor=${add(vendor)}`);
+    let collectionParam = null;
+    if (collection) {
+      if (!/^gid:\/\/shopify\/Collection\/\d+$/.test(collection)) {
+        return res.status(400).json({ error: 'invalid collection' });
+      }
+      const productGids = await collectionProductGids(
+        { shop: req.ctx.shop, token: req.ctx.token },
+        collection,
+      );
+      collectionParam = add(productGids);
+      filters.push(`i.shopify_product_gid=ANY(${collectionParam}::text[])`);
+    }
+    const where = filters.join(' AND ');
+    const order = {
+      updated_desc: 'latest.occurred_at DESC NULLS LAST, i.product_title, i.variant_title',
+      updated_asc: 'latest.occurred_at ASC NULLS LAST, i.product_title, i.variant_title',
+      stock_desc: 'COALESCE(stock.total_available, 0) DESC, i.product_title, i.variant_title',
+      stock_asc: 'COALESCE(stock.total_available, 0) ASC, i.product_title, i.variant_title',
+      brand_asc: 'lower(i.vendor), i.product_title, i.variant_title',
+      brand_desc: 'lower(i.vendor) DESC, i.product_title, i.variant_title',
+      name_asc: 'i.product_title, i.variant_title',
+      name_desc: 'i.product_title DESC, i.variant_title DESC',
+      collection: collectionParam
+        ? `array_position(${collectionParam}::text[], i.shopify_product_gid), i.product_title, i.variant_title`
+        : 'i.product_title, i.variant_title',
+    }[sort] || 'latest.occurred_at DESC NULLS LAST, i.product_title, i.variant_title';
+    const rowArgs = [...args, pageSize, (page - 1) * pageSize];
+    const limitParam = `$${args.length + 1}`;
+    const offsetParam = `$${args.length + 2}`;
+    const [count, rows] = await Promise.all([
+      q(`SELECT count(*)::int total FROM items i WHERE ${where}`, [...args]),
+      q(`WITH stock AS (
+           SELECT item_id, COALESCE(sum(available), 0)::int AS total_available
+           FROM current_levels GROUP BY item_id
+         ),
+         event_items AS (
+           SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
+                  e.staff_name, e.app_name, e.source_type,
+                  sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+                  sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
+                  max(lg.qty_after) FILTER (WHERE lg.state='available')::int AS available_after
+           FROM inventory_events e
+           JOIN inventory_ledger lg ON lg.event_id=e.id
+           GROUP BY lg.item_id, e.id
+         ),
+         latest AS (
+           SELECT DISTINCT ON (item_id) *
+           FROM event_items ORDER BY item_id, occurred_at DESC, event_id DESC
+         )
+         SELECT i.id, i.product_title, i.variant_title, i.sku, i.barcode,
+                i.vendor, i.price, i.source, i.shopify_product_gid,
+                COALESCE(stock.total_available, 0)::int AS total_available,
+                latest.occurred_at AS last_changed_at, latest.activity AS last_activity,
+                latest.staff_name, latest.app_name, latest.source_type,
+                latest.available_delta, latest.on_hand_delta, latest.available_after
+         FROM items i
+         LEFT JOIN stock ON stock.item_id=i.id
+         LEFT JOIN latest ON latest.item_id=i.id
+         WHERE ${where}
+         ORDER BY ${order}
+         LIMIT ${limitParam} OFFSET ${offsetParam}`, rowArgs),
+    ]);
+    res.json({
+      rows: rows.rows, total: count.rows[0].total, page, pageSize,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -259,8 +421,10 @@ api.get('/items', async (req, res) => {
 api.get('/items/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const [item, levels, series] = await Promise.all([
-      q('SELECT * FROM items WHERE id = $1', [id]),
+    const item = await q('SELECT * FROM items WHERE id = $1', [id]);
+    if (!item.rowCount) return res.status(404).json({ error: 'not found' });
+    const productGid = item.rows[0].shopify_product_gid;
+    const [levels, series, lastChange, productMeta] = await Promise.all([
       q(`SELECT l.name, cl.available, cl.on_hand, cl.committed, cl.incoming,
                 cl.reserved, cl.damaged, cl.safety_stock, cl.quality_control,
                 CASE WHEN cl.on_hand IS NULL OR cl.available IS NULL THEN NULL
@@ -270,11 +434,44 @@ api.get('/items/:id', async (req, res) => {
          WHERE cl.item_id = $1 ORDER BY l.name`, [id]),
       q(`SELECT snap_date, SUM(available)::int available
          FROM daily_snapshots WHERE item_id = $1 GROUP BY snap_date ORDER BY snap_date`, [id]),
+      q(`SELECT e.occurred_at, e.activity, e.staff_name, e.app_name, e.source_type,
+                sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+                sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta
+         FROM inventory_events e
+         JOIN inventory_ledger lg ON lg.event_id=e.id
+         WHERE lg.item_id=$1
+         GROUP BY e.id
+         ORDER BY e.occurred_at DESC, e.id DESC
+         LIMIT 1`, [id]),
+      productGid
+        ? graphql({ shop: req.ctx.shop, token: req.ctx.token }, `
+            query($id: ID!) {
+              product(id: $id) {
+                handle
+                onlineStoreUrl
+                onlineStorePreviewUrl
+              }
+            }`, { id: productGid }).catch(() => ({ product: null }))
+        : Promise.resolve({ product: null }),
     ]);
-    if (!item.rowCount) return res.status(404).json({ error: 'not found' });
+    const shopHandle = req.ctx.shop.replace(/\.myshopify\.com$/i, '');
+    const productId = String(productGid || '').split('/').pop();
+    const variantId = String(item.rows[0].shopify_variant_gid || '').split('/').pop();
+    const storefrontBase = productMeta.product?.onlineStoreUrl
+      || productMeta.product?.onlineStorePreviewUrl
+      || null;
     res.json({
       item: item.rows[0], levels: levels.rows, series: series.rows,
-      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+      lastChange: lastChange.rows[0] || null,
+      shopHandle,
+      links: {
+        admin: productId
+          ? `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/products/${encodeURIComponent(productId)}`
+          : null,
+        storefront: storefrontBase
+          ? `${storefrontBase}${storefrontBase.includes('?') ? '&' : '?'}variant=${encodeURIComponent(variantId)}`
+          : null,
+      },
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -419,6 +616,35 @@ api.get('/history', async (req, res) => {
       rows: rows.rows, page, pageSize, total: count.rows[0].total,
       shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
     });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.get('/alerts', async (req, res) => {
+  try {
+    const rows = await q(`
+      SELECT ra.id, ra.snap_date, ra.state, ra.expected, ra.actual, ra.created_at,
+             i.id AS item_id, i.product_title, i.variant_title, i.sku,
+             i.shopify_product_gid, loc.name AS location
+      FROM reconcile_alerts ra
+      JOIN items i ON i.id=ra.item_id
+      JOIN locations loc ON loc.id=ra.location_id
+      WHERE NOT ra.resolved
+      ORDER BY ra.created_at DESC
+      LIMIT 200`);
+    res.json({
+      rows: rows.rows,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.post('/alerts/:id/resolve', async (req, res) => {
+  try {
+    const result = await q(
+      'UPDATE reconcile_alerts SET resolved=true WHERE id=$1 AND NOT resolved',
+      [Number(req.params.id)],
+    );
+    res.json({ resolved: result.rowCount > 0 });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

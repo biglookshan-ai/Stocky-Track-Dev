@@ -16,6 +16,10 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
 - `migrations/` — 全部表结构（含 M2/M3 的调整/盘点/虚拟库存/BOM，先建好）
 
+当前业务界面支持 Brand、Collection、Available 和最近库存修改时间筛选/排序；
+商品详情提供 Shopify 前台/后台入口、英文库存状态和长期保存的分页历史；首页可查看
+最近 3 天修改商品，并进入系统状态页复核对账差异。
+
 ## 部署（Railway）
 
 1. Dev Dashboard 建 app：embedded=true、managed install、Custom distribution → cinegearpro
