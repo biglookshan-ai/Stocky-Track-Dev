@@ -70,6 +70,32 @@ app.get('/healthz', async (req, res) => {
 const api = express.Router();
 api.use(requireSession());
 
+function backfillNeedsResume(state) {
+  if (!state || state.running || state.finishedAt || !state.cursor || !state.start) return false;
+  return +new Date(state.cursor) > +new Date(state.start);
+}
+
+function continueHistoryBackfill(ctx) {
+  return withLock('shopify-heavy', 2 * 60 * 60 * 1000,
+    () => runHistorySync(ctx, { days: 180, incremental: false }))
+    .then(async (lockResult) => {
+      if (!lockResult.skipped) return;
+      const state = await getState('inventory_history_backfill');
+      await setState('inventory_history_backfill', {
+        ...(state || {}), running: false,
+        error: '另一个 Shopify 全量任务正在运行，请稍后重试',
+      });
+    })
+    .catch(async (error) => {
+      console.error('[history] background backfill failed:', error.message);
+      const state = await getState('inventory_history_backfill').catch(() => ({}));
+      await setState('inventory_history_backfill', {
+        ...(state || {}), running: false, error: error.message,
+        failedAt: new Date().toISOString(),
+      }).catch(() => {});
+    });
+}
+
 api.get('/status', async (req, res) => {
   try {
     const [items, events, ledger, backlog, pending, alerts, reasons] = await Promise.all([
@@ -81,6 +107,19 @@ api.get('/status', async (req, res) => {
       q('SELECT count(*)::int n FROM reconcile_alerts WHERE NOT resolved'),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
     ]);
+    const historySync = await getState('inventory_history_sync');
+    let historyBackfill = await getState('inventory_history_backfill');
+    // A deployment can interrupt a manual history backfill before an offline
+    // token has been restored. The first authenticated app request has a valid
+    // Admin token, so use it to resume from the saved cursor automatically.
+    if (backfillNeedsResume(historyBackfill)) {
+      historyBackfill = {
+        ...historyBackfill, running: true, error: null,
+        resumedAt: new Date().toISOString(),
+      };
+      await setState('inventory_history_backfill', historyBackfill);
+      continueHistoryBackfill({ shop: req.ctx.shop, token: req.ctx.token });
+    }
     res.json({
       items: items.rows[0],
       events: events.rows[0],
@@ -92,8 +131,8 @@ api.get('/status', async (req, res) => {
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
       snapshotError: await getState('last_snapshot_error'),
-      historySync: await getState('inventory_history_sync'),
-      historyBackfill: await getState('inventory_history_backfill'),
+      historySync,
+      historyBackfill,
       webhooksRegistered: await getState('webhooks_registered'),
       staff: req.ctx.staff,
     });
@@ -167,26 +206,30 @@ api.post('/jobs/history', async (req, res) => {
     const running = await getState(stateKey);
     if (running?.running) return res.json({ started: false, running: true, state: running });
     await setState(stateKey, { ...(running || {}), running: true, startedAt: new Date().toISOString() });
-    withLock('shopify-heavy', 2 * 60 * 60 * 1000,
-      () => runHistorySync(
-        { shop: req.ctx.shop, token: req.ctx.token },
-        { days, incremental },
-      ))
-      .then(async (lockResult) => {
-        if (lockResult.skipped) {
+    if (incremental) {
+      withLock('shopify-heavy', 2 * 60 * 60 * 1000,
+        () => runHistorySync(
+          { shop: req.ctx.shop, token: req.ctx.token },
+          { days, incremental },
+        ))
+        .then(async (lockResult) => {
+          if (lockResult.skipped) {
+            await setState(stateKey, {
+              ...(await getState(stateKey) || {}),
+              running: false, error: '另一个 Shopify 全量任务正在运行，请稍后重试',
+            });
+          }
+        })
+        .catch(async (e) => {
+          console.error('[history] manual sync failed:', e.message);
           await setState(stateKey, {
             ...(await getState(stateKey) || {}),
-            running: false, error: '另一个 Shopify 全量任务正在运行，请稍后重试',
+            running: false, error: e.message, failedAt: new Date().toISOString(),
           });
-        }
-      })
-      .catch(async (e) => {
-        console.error('[history] manual sync failed:', e.message);
-        await setState(stateKey, {
-          ...(await getState(stateKey) || {}),
-          running: false, error: e.message, failedAt: new Date().toISOString(),
         });
-      });
+    } else {
+      continueHistoryBackfill({ shop: req.ctx.shop, token: req.ctx.token });
+    }
     res.status(202).json({ started: true, days });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

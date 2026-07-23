@@ -133,6 +133,7 @@ async function viewDashboard() {
         <div><strong>每日库存核对</strong><div class="muted">${snap ? `上次完成 ${fmtDate(snap.finishedAt || snap.snapDate)}，自动修正 ${snap.driftHealed} 处差异。` : '尚未完成首次核对。'}</div></div>
         <div><strong>历史记录</strong><div class="muted">${backfill?.running
           ? `正在读取 Shopify 最近 180 天，已读取 ${backfill.fetched || 0} 行。`
+          : backfill?.error ? `同步已暂停：${esc(backfill.error)}`
           : backfill?.finishedAt ? `最近 180 天已同步完成（${fmtDate(backfill.finishedAt)}）。` : '尚未同步 Shopify 最近 180 天。'}</div></div>
       </div>
     </div>
