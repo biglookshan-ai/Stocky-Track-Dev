@@ -34,9 +34,17 @@ button { background: var(--green); color: #fff; border: 0; border-radius: 8px; p
 button.secondary { background: #fff; color: var(--text); border: 1px solid var(--border); }
 button:disabled { opacity: .5; cursor: default; }
 input[type=search], input[type=text] { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; width: 320px; font-size: 14px; }
+select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: #fff; font-size: 14px; }
 .muted { color: var(--sub); }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 a.item-link { color: var(--blue); text-decoration: none; cursor: pointer; }
 .chart { width: 100%; height: 220px; }
 .error { color: var(--red); }
+.table-scroll { overflow-x: auto; }
+.history-table { min-width: 1050px; }
+.card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.card-heading h2 { margin: 0; }
+.ref { max-width: 260px; overflow-wrap: anywhere; font-size: 12px; }
+details.card summary { cursor: pointer; font-weight: 600; }
+details.card[open] summary { margin-bottom: 12px; }
 @media (max-width: 640px) { input[type=search] { width: 100%; } }

@@ -5,9 +5,9 @@
 // everything else in the background.
 import crypto from 'node:crypto';
 import { q } from './db.js';
-import { recordLevelUpdate } from './ledger.js';
-import { upsertProductFromWebhook } from './catalog.js';
-import { graphql } from './shopify.js';
+import { recordLevelUpdate, upsertCurrentLevel } from './ledger.js';
+import { INVENTORY_STATES, upsertProductFromWebhook } from './catalog.js';
+import { graphql, offlineCtx } from './shopify.js';
 
 const SECRET = () => process.env.SHOPIFY_API_SECRET || '';
 
@@ -44,12 +44,12 @@ export async function receive(req, res) {
 // Process unhandled events oldest-first. Called by the scheduler.
 export async function processPending(limit = 200) {
   const rows = await q(
-    `SELECT id, topic, payload FROM webhook_events
+    `SELECT id, topic, shop_domain, payload FROM webhook_events
      WHERE processed_at IS NULL ORDER BY id ASC LIMIT $1`, [limit]);
   let done = 0;
   for (const ev of rows.rows) {
     try {
-      await handle(ev.topic, ev.payload);
+      await handle(ev.topic, ev.payload, ev.shop_domain);
       await q('UPDATE webhook_events SET processed_at = now(), error = NULL WHERE id = $1', [ev.id]);
       done++;
     } catch (e) {
@@ -62,7 +62,7 @@ export async function processPending(limit = 200) {
   return done;
 }
 
-async function handle(topic, p) {
+async function handle(topic, p, shopDomain) {
   switch (topic) {
     case 'inventory_levels/update': {
       const item = await q(
@@ -74,12 +74,29 @@ async function handle(topic, p) {
       if (!item.rowCount) throw new Error(`unknown inventory_item ${p.inventory_item_id} (run catalog sync)`);
       if (!loc.rowCount) throw new Error(`unknown location ${p.location_id}`);
       if (typeof p.available !== 'number') return; // untracked item — nothing to record
+      const ctx = offlineCtx(shopDomain || null);
+      const levelGid = `gid://shopify/InventoryLevel/${p.location_id}?inventory_item_id=${p.inventory_item_id}`;
+      const data = await graphql(ctx, `
+        query($id: ID!) {
+          inventoryLevel(id: $id) {
+            quantities(names: ["available", "on_hand", "committed", "incoming", "reserved", "damaged", "safety_stock", "quality_control"]) {
+              name quantity
+            }
+          }
+        }`, { id: levelGid });
+      const quantities = {};
+      for (const entry of data.inventoryLevel?.quantities || []) quantities[entry.name] = entry.quantity;
+      if (quantities.available === null || quantities.available === undefined) quantities.available = p.available;
+      for (const state of INVENTORY_STATES) {
+        if (!(state in quantities)) quantities[state] = null;
+      }
       await recordLevelUpdate({
         itemId: item.rows[0].id,
         locationId: loc.rows[0].id,
-        available: p.available,
+        available: quantities.available ?? p.available,
         occurredAt: p.updated_at || new Date().toISOString(),
       });
+      await upsertCurrentLevel(item.rows[0].id, loc.rows[0].id, quantities);
       return;
     }
     case 'products/update':

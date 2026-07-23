@@ -9,6 +9,7 @@ import { initialSync } from './catalog.js';
 import { receive as receiveWebhook, processPending, registerAll, listSubscriptions } from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
+import { groupAuditEvents, runHistorySync } from './inventory-history.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -88,6 +89,7 @@ api.get('/status', async (req, res) => {
       reasons: reasons.rows[0].n,
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
+      historySync: await getState('inventory_history_sync'),
       webhooksRegistered: await getState('webhooks_registered'),
       staff: req.ctx.staff,
     });
@@ -137,6 +139,27 @@ api.post('/jobs/snapshot', async (req, res) => {
 api.post('/jobs/attribution', async (req, res) => {
   try { res.json(await runAttribution()); } catch (e) { res.status(500).json({ error: e.message }); }
 });
+api.post('/jobs/history', async (req, res) => {
+  try {
+    const days = Math.min(180, Math.max(1, Number(req.query.days || 2)));
+    const running = await getState('inventory_history_sync');
+    if (running?.running) return res.json({ started: false, running: true, state: running });
+    await setState('inventory_history_sync', { ...(running || {}), running: true, startedAt: new Date().toISOString() });
+    withLock('inventory-history', 2 * 60 * 60 * 1000,
+      () => runHistorySync(
+        { shop: req.ctx.shop, token: req.ctx.token },
+        { days, incremental: days <= 2 },
+      ))
+      .catch(async (e) => {
+        console.error('[history] manual sync failed:', e.message);
+        await setState('inventory_history_sync', {
+          ...(await getState('inventory_history_sync') || {}),
+          running: false, error: e.message, failedAt: new Date().toISOString(),
+        });
+      });
+    res.status(202).json({ started: true, days });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // Items list/search with current levels.
 api.get('/items', async (req, res) => {
@@ -162,22 +185,62 @@ api.get('/items', async (req, res) => {
 api.get('/items/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
-    const [item, levels, ledger, series] = await Promise.all([
+    const [item, levels, ledger, eventRows, series] = await Promise.all([
       q('SELECT * FROM items WHERE id = $1', [id]),
-      q(`SELECT l.name, cl.available, cl.on_hand, cl.updated_at
+      q(`SELECT l.name, cl.available, cl.on_hand, cl.committed, cl.incoming,
+                cl.reserved, cl.damaged, cl.safety_stock, cl.quality_control,
+                CASE WHEN cl.on_hand IS NULL OR cl.available IS NULL THEN NULL
+                     ELSE cl.on_hand - cl.available END AS unavailable,
+                cl.updated_at
          FROM current_levels cl JOIN locations l ON l.id = cl.location_id
          WHERE cl.item_id = $1 ORDER BY l.name`, [id]),
-      q(`SELECT lg.id, lg.delta, lg.qty_after, lg.occurred_at, lg.source_type, lg.source_ref,
+      q(`SELECT lg.id, lg.state, lg.delta, lg.qty_after, lg.occurred_at, lg.source_type, lg.source_ref,
                 lg.reason_code, lg.notes, lg.attribution, loc.name AS location, s.display_name AS staff
          FROM inventory_ledger lg
          JOIN locations loc ON loc.id = lg.location_id
          LEFT JOIN staff s ON s.id = lg.staff_id
          WHERE lg.item_id = $1 ORDER BY lg.occurred_at DESC LIMIT 500`, [id]),
+      q(`WITH changes AS (
+           SELECT lg.*, loc.name AS location,
+             COALESCE(lg.qty_after,
+               CASE lg.state
+                 WHEN 'available' THEN cl.available
+                 WHEN 'on_hand' THEN cl.on_hand
+                 WHEN 'committed' THEN cl.committed
+                 WHEN 'incoming' THEN cl.incoming
+                 WHEN 'reserved' THEN cl.reserved
+                 WHEN 'damaged' THEN cl.damaged
+                 WHEN 'safety_stock' THEN cl.safety_stock
+                 WHEN 'quality_control' THEN cl.quality_control
+               END
+               - COALESCE(SUM(lg.delta) OVER (
+                   PARTITION BY lg.item_id, lg.location_id, lg.state
+                   ORDER BY lg.occurred_at DESC, lg.id DESC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                 ), 0)
+             )::int AS computed_qty_after
+           FROM inventory_ledger lg
+           JOIN locations loc ON loc.id=lg.location_id
+           JOIN current_levels cl ON cl.item_id=lg.item_id AND cl.location_id=lg.location_id
+           WHERE lg.item_id=$1 AND lg.event_id IS NOT NULL
+         )
+         SELECT c.event_id, c.state, c.delta, c.computed_qty_after, c.occurred_at,
+                c.reason_code, c.source_type, c.actor_name, c.app_name,
+                c.reference_document_uri, c.location,
+                e.occurred_at AS event_occurred_at, e.activity, e.reason AS event_reason,
+                e.app_name AS event_app_name, e.staff_name,
+                e.reference_document_uri AS event_reference_uri,
+                e.source_type AS event_source_type
+         FROM changes c JOIN inventory_events e ON e.id=c.event_id
+         ORDER BY e.occurred_at DESC, c.id DESC LIMIT 2000`, [id]),
       q(`SELECT snap_date, SUM(available)::int available
          FROM daily_snapshots WHERE item_id = $1 GROUP BY snap_date ORDER BY snap_date`, [id]),
     ]);
     if (!item.rowCount) return res.status(404).json({ error: 'not found' });
-    res.json({ item: item.rows[0], levels: levels.rows, ledger: ledger.rows, series: series.rows });
+    res.json({
+      item: item.rows[0], levels: levels.rows, ledger: ledger.rows,
+      history: groupAuditEvents(eventRows.rows, levels.rows), series: series.rows,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -185,7 +248,8 @@ api.get('/items/:id', async (req, res) => {
 api.get('/ledger', async (req, res) => {
   try {
     const r = await q(`
-      SELECT lg.id, lg.delta, lg.qty_after, lg.occurred_at, lg.source_type, lg.source_ref, lg.attribution,
+      SELECT lg.id, lg.state, lg.delta, lg.qty_after, lg.occurred_at, lg.source_type,
+             lg.source_ref, lg.attribution, lg.actor_name, lg.app_name,
              i.product_title, i.variant_title, i.sku, loc.name AS location
       FROM inventory_ledger lg
       JOIN items i ON i.id = lg.item_id
@@ -203,6 +267,11 @@ app.use('/api', api);
 function startScheduler() {
   setInterval(() => processPending().catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
   setInterval(() => runAttribution().catch((e) => console.error('[sched] attribution:', e.message)), 120000);
+  setInterval(() => {
+    withLock('inventory-history', 15 * 60 * 1000,
+      () => runHistorySync(offlineCtx(), { days: 2 }))
+      .catch((e) => console.error('[sched] inventory history:', e.message));
+  }, 5 * 60 * 1000);
   setInterval(async () => {
     try {
       const hour = Number(process.env.SNAPSHOT_HOUR ?? 3);

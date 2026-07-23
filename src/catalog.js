@@ -5,6 +5,11 @@
 import { graphql } from './shopify.js';
 import { q, setState } from './db.js';
 
+export const INVENTORY_STATES = [
+  'available', 'on_hand', 'committed', 'incoming',
+  'reserved', 'damaged', 'safety_stock', 'quality_control',
+];
+
 export async function syncLocations(ctx) {
   const data = await graphql(ctx, `{
     locations(first: 50, includeInactive: true) {
@@ -32,7 +37,7 @@ query($cursor: String) {
         inventoryLevels(first: 10) {
           nodes {
             location { id }
-            quantities(names: ["available", "on_hand"]) { name quantity }
+            quantities(names: ["available", "on_hand", "committed", "incoming", "reserved", "damaged", "safety_stock", "quality_control"]) { name quantity }
           }
         }
       }
@@ -40,7 +45,7 @@ query($cursor: String) {
   }
 }`;
 
-// Full variant walk. onLevel(itemId, locationGid, {available, on_hand}) is
+// Full variant walk. onLevel receives all Shopify inventory quantity states.
 // called for every level; the caller decides what to do (baseline vs reconcile).
 export async function walkVariants(ctx, onLevel, { progressKey = null } = {}) {
   const locByGid = await locationMap();
@@ -97,11 +102,14 @@ export async function locationMap() {
 export async function initialSync(ctx) {
   await syncLocations(ctx);
   const n = await walkVariants(ctx, async (itemId, locId, qty) => {
-    await q(`INSERT INTO current_levels (item_id, location_id, available, on_hand, updated_at)
-             VALUES ($1,$2,$3,$4, now())
+    await q(`INSERT INTO current_levels
+               (item_id, location_id, available, on_hand, committed, incoming, reserved, damaged, safety_stock, quality_control, updated_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
              ON CONFLICT (item_id, location_id) DO UPDATE
-               SET available = $3, on_hand = $4, updated_at = now()`,
-      [itemId, locId, qty.available ?? null, qty.on_hand ?? null]);
+               SET available=$3, on_hand=$4, committed=$5, incoming=$6,
+                   reserved=$7, damaged=$8, safety_stock=$9, quality_control=$10,
+                   updated_at=now()`,
+      [itemId, locId, ...INVENTORY_STATES.map((state) => qty[state] ?? null)]);
   }, { progressKey: 'initial_sync' });
   await setState('initial_sync', { count: n, done: true, finishedAt: new Date().toISOString() });
   return n;

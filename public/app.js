@@ -23,9 +23,16 @@ const deltaCell = (n) => `<td class="num ${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">
 
 const SOURCE_LABEL = {
   sale: '销售', refund: '退货入库', adjustment: '调整', stocktake: '盘点', import: '历史导入',
-  reconciliation: '对账修正', external_app: '外部操作', unknown: '待归因', bundle_op: '组套',
+  reconciliation: '对账修正', external_app: '外部 App', admin_manual: '人工调整',
+  order: '订单', transfer: '调拨', unknown: '待归因', bundle_op: '组套',
 };
 const srcBadge = (s) => `<span class="badge ${esc(s)}">${SOURCE_LABEL[s] || esc(s)}</span>`;
+const signed = (n) => `${Number(n) > 0 ? '+' : ''}${Number(n)}`;
+const historyCell = (change) => {
+  if (!change || change.qty_after === null) return '<td class="num muted">—</td>';
+  const delta = Number(change.delta || 0);
+  return `<td class="num"><span class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'muted'}">(${signed(delta)})</span> ${change.qty_after}</td>`;
+};
 
 // ---- views ----
 
@@ -33,6 +40,7 @@ async function viewDashboard() {
   const s = await api('/status');
   const sync = s.initialSync;
   const snap = s.lastSnapshot;
+  const history = s.historySync;
   app.innerHTML = `
     <div class="grid">
       <div class="stat"><div class="n">${s.items.n}</div><div class="l">商品变体（本地 ${s.items.local}）</div></div>
@@ -55,6 +63,10 @@ async function viewDashboard() {
         <button id="btn-snapshot" class="secondary">立即跑一次快照/对账</button>
         <span class="muted">${snap ? `上次快照 ${snap.snapDate}：${snap.snapshotRows} 行，修复漂移 ${snap.driftHealed}` : '尚无快照'}</span>
       </div>
+      <div class="row">
+        <button id="btn-history" class="secondary">同步最近 180 天调整历史</button>
+        <span class="muted">${history ? history.running ? `⏳ 同步中… 已读取 ${history.fetched || 0} 行` : history.error ? `❌ ${esc(history.error)}` : `上次完成 ${fmtDate(history.finishedAt)}：新增 ${history.inserted || 0}，匹配 ${history.matched || 0}` : '尚未同步'}</span>
+      </div>
       <p class="muted">账本第一天起就在记录：目录同步建立基线 → webhook 记增量 → 每日快照对账自愈。</p>
     </div>
     <div class="card">
@@ -76,6 +88,10 @@ async function viewDashboard() {
   $('#btn-snapshot').onclick = guard(async (e) => {
     e.target.textContent = '快照运行中…（可能几分钟）';
     try { await api('/jobs/snapshot', { method: 'POST' }); } finally { viewDashboard(); }
+  });
+  $('#btn-history').onclick = guard(async () => {
+    await api('/jobs/history?days=180', { method: 'POST' });
+    setTimeout(viewDashboard, 1500);
   });
 }
 
@@ -102,6 +118,7 @@ async function viewItems() {
   };
   $('#btn-search').onclick = run;
   $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') run(); });
+  run();
 }
 
 function lineChart(series) {
@@ -127,24 +144,49 @@ function lineChart(series) {
 
 async function viewItem(id) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const { item, levels, ledger, series } = await api(`/items/${id}`);
+  const { item, levels, ledger, history, series } = await api(`/items/${id}`);
   app.innerHTML = `
     <div class="card">
       <h2>${esc(item.product_title)}${item.variant_title && item.variant_title !== 'Default Title' ? ` / ${esc(item.variant_title)}` : ''}</h2>
       <p class="muted">SKU ${esc(item.sku) || '—'} · 条码 ${esc(item.barcode) || '—'} · ${esc(item.vendor)} · 零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</p>
       ${lineChart(series)}
     </div>
-    <div class="card"><h2>各仓可用量</h2>
-      <table><thead><tr><th>仓位</th><th class="num">可用</th><th class="num">在手</th><th>更新时间</th></tr></thead>
-      <tbody>${levels.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.available ?? '—'}</td><td class="num">${l.on_hand ?? '—'}</td><td>${fmtDate(l.updated_at)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">无</td></tr>'}</tbody></table>
+    <div class="card"><h2>各仓库存状态</h2>
+      <div class="table-scroll"><table><thead><tr><th>仓位</th><th class="num">不可用</th><th class="num">已承诺</th><th class="num">可用</th><th class="num">在手</th><th class="num">在途</th><th>更新时间</th></tr></thead>
+      <tbody>${levels.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.unavailable ?? '—'}</td><td class="num">${l.committed ?? '—'}</td><td class="num">${l.available ?? '—'}</td><td class="num">${l.on_hand ?? '—'}</td><td class="num">${l.incoming ?? '—'}</td><td>${fmtDate(l.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">无</td></tr>'}</tbody></table></div>
     </div>
-    <div class="card"><h2>账本流水（最近 500 条）</h2>
-      <table><thead><tr><th>时间</th><th>仓位</th><th class="num">±</th><th class="num">变动后</th><th>来源</th><th>原因/单据</th><th>操作人</th><th>备注</th></tr></thead>
+    <div class="card">
+      <div class="card-heading"><h2>库存修改记录（最近 500 次事件）</h2>
+        <select id="history-location"><option value="">全部仓位</option>${levels.map((l) => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('')}</select>
+      </div>
+      <div class="table-scroll"><table class="history-table"><thead><tr><th>日期</th><th>活动</th><th>操作人 / App</th><th class="num">不可用</th><th class="num">已承诺</th><th class="num">可用</th><th class="num">在手</th><th class="num">在途</th><th>仓位 / 引用</th></tr></thead>
+      <tbody id="history-body"></tbody></table></div>
+      ${history.length ? '' : '<p class="muted">暂无 Shopify 调整历史。请先在“状态”页同步调整历史，并确认应用具有 read_reports 权限。</p>'}
+    </div>
+    <details class="card"><summary>技术账本流水（最近 500 条）</summary>
+      <div class="table-scroll"><table><thead><tr><th>时间</th><th>仓位</th><th>状态</th><th class="num">±</th><th class="num">变动后</th><th>来源</th><th>原因/单据</th><th>操作人</th><th>备注</th></tr></thead>
       <tbody>${ledger.map((r) => `<tr>
-        <td>${fmtDate(r.occurred_at)}</td><td>${esc(r.location)}</td>${deltaCell(r.delta)}
+        <td>${fmtDate(r.occurred_at)}</td><td>${esc(r.location)}</td><td>${esc(r.state)}</td>${deltaCell(r.delta)}
         <td class="num">${r.qty_after ?? '—'}</td><td>${srcBadge(r.source_type)}</td>
-        <td>${esc(r.reason_code || r.source_ref || '')}</td><td>${esc(r.staff || '')}</td><td>${esc(r.notes || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">暂无流水</td></tr>'}</tbody></table>
-    </div>`;
+        <td>${esc(r.reason_code || r.source_ref || '')}</td><td>${esc(r.staff || '')}</td><td>${esc(r.notes || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">暂无流水</td></tr>'}</tbody></table></div>
+    </details>`;
+  const renderHistory = () => {
+    const location = $('#history-location').value;
+    const rows = history.filter((event) => !location || event.location === location);
+    $('#history-body').innerHTML = rows.map((event) => `<tr>
+      <td>${fmtDate(event.occurred_at)}</td>
+      <td>${esc(event.activity || '其他')}<div>${srcBadge(event.source_type)}</div></td>
+      <td>${esc(event.created_by || 'Shopify')}</td>
+      ${historyCell(event.changes.unavailable)}
+      ${historyCell(event.changes.committed)}
+      ${historyCell(event.changes.available)}
+      ${historyCell(event.changes.on_hand)}
+      ${historyCell(event.changes.incoming)}
+      <td>${esc(event.location)}${event.reference_document_uri ? `<div class="muted ref">${esc(event.reference_document_uri)}</div>` : ''}</td>
+    </tr>`).join('') || '<tr><td colspan="9" class="muted">该仓位暂无记录</td></tr>';
+  };
+  $('#history-location').onchange = renderHistory;
+  renderHistory();
 }
 
 async function viewLedger() {
@@ -152,12 +194,12 @@ async function viewLedger() {
   const { rows } = await api('/ledger');
   app.innerHTML = `
     <div class="card"><h2>全店最近流水（200 条）</h2>
-      <table><thead><tr><th>时间</th><th>商品</th><th>仓位</th><th class="num">±</th><th class="num">变动后</th><th>来源</th></tr></thead>
+      <div class="table-scroll"><table><thead><tr><th>时间</th><th>商品</th><th>仓位</th><th>状态</th><th class="num">±</th><th class="num">变动后</th><th>来源</th><th>操作人 / App</th></tr></thead>
       <tbody>${rows.map((r) => `<tr>
         <td>${fmtDate(r.occurred_at)}</td>
         <td>${esc(r.product_title)}${r.variant_title && r.variant_title !== 'Default Title' ? ` / ${esc(r.variant_title)}` : ''} <span class="muted">${esc(r.sku)}</span></td>
-        <td>${esc(r.location)}</td>${deltaCell(r.delta)}<td class="num">${r.qty_after ?? '—'}</td>
-        <td>${srcBadge(r.source_type)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">暂无流水</td></tr>'}</tbody></table>
+        <td>${esc(r.location)}</td><td>${esc(r.state)}</td>${deltaCell(r.delta)}<td class="num">${r.qty_after ?? '—'}</td>
+        <td>${srcBadge(r.source_type)}</td><td>${esc(r.actor_name || r.app_name || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">暂无流水</td></tr>'}</tbody></table></div>
     </div>`;
 }
 
