@@ -89,7 +89,9 @@ api.get('/status', async (req, res) => {
       reasons: reasons.rows[0].n,
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
+      snapshotError: await getState('last_snapshot_error'),
       historySync: await getState('inventory_history_sync'),
+      historyBackfill: await getState('inventory_history_backfill'),
       webhooksRegistered: await getState('webhooks_registered'),
       staff: req.ctx.staff,
     });
@@ -137,7 +139,18 @@ api.get('/setup/webhooks', async (req, res) => {
 // Manual triggers (also run on schedule) — useful during M0 verification.
 api.post('/jobs/snapshot', async (req, res) => {
   try {
-    const r = await withLock('snapshot', 30 * 60 * 1000, () => runSnapshot({ shop: req.ctx.shop, token: req.ctx.token }));
+    const r = await withLock('shopify-heavy', 30 * 60 * 1000, async () => {
+      try {
+        const result = await runSnapshot({ shop: req.ctx.shop, token: req.ctx.token });
+        await setState('last_snapshot_error', null);
+        return result;
+      } catch (error) {
+        await setState('last_snapshot_error', {
+          error: error.message, at: new Date().toISOString(),
+        });
+        throw error;
+      }
+    });
     res.json(r);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -147,18 +160,28 @@ api.post('/jobs/attribution', async (req, res) => {
 api.post('/jobs/history', async (req, res) => {
   try {
     const days = Math.min(180, Math.max(1, Number(req.query.days || 2)));
-    const running = await getState('inventory_history_sync');
+    const incremental = days <= 2;
+    const stateKey = incremental ? 'inventory_history_sync' : 'inventory_history_backfill';
+    const running = await getState(stateKey);
     if (running?.running) return res.json({ started: false, running: true, state: running });
-    await setState('inventory_history_sync', { ...(running || {}), running: true, startedAt: new Date().toISOString() });
-    withLock('inventory-history', 2 * 60 * 60 * 1000,
+    await setState(stateKey, { ...(running || {}), running: true, startedAt: new Date().toISOString() });
+    withLock('shopify-heavy', 2 * 60 * 60 * 1000,
       () => runHistorySync(
         { shop: req.ctx.shop, token: req.ctx.token },
-        { days, incremental: days <= 2 },
+        { days, incremental },
       ))
+      .then(async (lockResult) => {
+        if (lockResult.skipped) {
+          await setState(stateKey, {
+            ...(await getState(stateKey) || {}),
+            running: false, error: '另一个 Shopify 全量任务正在运行，请稍后重试',
+          });
+        }
+      })
       .catch(async (e) => {
         console.error('[history] manual sync failed:', e.message);
-        await setState('inventory_history_sync', {
-          ...(await getState('inventory_history_sync') || {}),
+        await setState(stateKey, {
+          ...(await getState(stateKey) || {}),
           running: false, error: e.message, failedAt: new Date().toISOString(),
         });
       });
@@ -273,7 +296,7 @@ function startScheduler() {
   setInterval(() => processPending().catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
   setInterval(() => runAttribution().catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {
-    withLock('inventory-history', 15 * 60 * 1000,
+    withLock('shopify-heavy', 15 * 60 * 1000,
       () => runHistorySync(offlineCtx(), { days: 2 }))
       .catch((e) => console.error('[sched] inventory history:', e.message));
   }, 5 * 60 * 1000);
@@ -285,7 +308,7 @@ function startScheduler() {
       const today = now.toISOString().slice(0, 10);
       const last = await getState('last_snapshot');
       if (last && last.snapDate === today) return;
-      await withLock('snapshot', 30 * 60 * 1000, () => runSnapshot(offlineCtx()));
+      await withLock('shopify-heavy', 30 * 60 * 1000, () => runSnapshot(offlineCtx()));
     } catch (e) { console.error('[sched] snapshot:', e.message); }
   }, 60000);
 }

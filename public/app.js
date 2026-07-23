@@ -41,6 +41,7 @@ async function viewDashboard() {
   const sync = s.initialSync;
   const snap = s.lastSnapshot;
   const history = s.historySync;
+  const backfill = s.historyBackfill;
   app.innerHTML = `
     <div class="grid">
       <div class="stat"><div class="n">${s.items.n}</div><div class="l">商品变体（本地 ${s.items.local}）</div></div>
@@ -67,11 +68,14 @@ async function viewDashboard() {
       </div>
       <div class="row">
         <button id="btn-snapshot" class="secondary">立即跑一次快照/对账</button>
-        <span class="muted">${snap ? `上次快照 ${snap.snapDate}：${snap.snapshotRows} 行，修复漂移 ${snap.driftHealed}` : '尚无快照'}</span>
+        <span class="muted">${s.snapshotError?.error
+          ? `❌ ${esc(s.snapshotError.error)}`
+          : snap ? `上次快照 ${snap.snapDate}：${snap.snapshotRows} 行，修复漂移 ${snap.driftHealed}` : '尚无快照'}</span>
       </div>
       <div class="row">
         <button id="btn-history" class="secondary">同步最近 180 天调整历史</button>
-        <span class="muted">${history ? history.running ? `⏳ 同步中… 已读取 ${history.fetched || 0} 行` : history.error ? `❌ ${esc(history.error)}` : `上次完成 ${fmtDate(history.finishedAt)}：新增 ${history.inserted || 0}，匹配 ${history.matched || 0}` : '尚未同步'}</span>
+        <span class="muted">${backfill ? backfill.running ? `⏳ 历史回填中… 已读取 ${backfill.fetched || 0} 行` : backfill.error ? `❌ ${esc(backfill.error)}` : `历史回填完成 ${fmtDate(backfill.finishedAt)}：新增 ${backfill.inserted || 0}` : '尚未回填'}
+        ${history?.finishedAt ? ` · 实时归因 ${fmtDate(history.finishedAt)}` : ''}</span>
       </div>
       <p class="muted">账本第一天起就在记录：目录同步建立基线 → webhook 记增量 → 每日快照对账自愈。</p>
     </div>

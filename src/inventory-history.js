@@ -345,7 +345,8 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
 export async function runHistorySync(ctx, {
   since = null, until = null, days = 2, incremental = true,
 } = {}) {
-  const state = await getState('inventory_history_sync');
+  const stateKey = incremental ? 'inventory_history_sync' : 'inventory_history_backfill';
+  const state = await getState(stateKey);
   const end = until ? new Date(until) : new Date();
   const defaultStart = new Date(+end - days * 86400000);
   const requestedStart = since ? new Date(since) : defaultStart;
@@ -391,7 +392,7 @@ export async function runHistorySync(ctx, {
     const extra = await ingestEnrichedRemainders(rows, enriched, lookup);
     inserted += extra.inserted;
     skipped += extra.skipped;
-    await setState('inventory_history_sync', {
+    await setState(stateKey, {
       cursor: new Date(cursor).toISOString(),
       fetched, inserted, matched, skipped,
       running, mode, direction, start: syncStart,
@@ -417,6 +418,6 @@ export async function runHistorySync(ctx, {
     finishedAt: new Date().toISOString(), running: false,
     mode, direction, start: syncStart,
   };
-  await setState('inventory_history_sync', summary);
+  await setState(stateKey, summary);
   return summary;
 }
