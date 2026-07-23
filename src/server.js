@@ -10,6 +10,19 @@ import { receive as receiveWebhook, processPending, registerAll, listSubscriptio
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
 import { groupAuditEvents, runHistorySync } from './inventory-history.js';
+import {
+  adjustmentsCsv,
+  applyAdjustment,
+  archiveAdjustment,
+  createAdjustmentReason,
+  getAdjustment,
+  listAdjustmentOptions,
+  listAdjustments,
+  saveAdjustmentDraft,
+  searchAdjustmentItems,
+  updateAdjustmentReason,
+  updateStaff,
+} from './adjustments.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -337,6 +350,111 @@ api.get('/item-options', async (req, res) => {
     ]);
     res.json({ vendors: vendors.rows.map((row) => row.vendor), collections });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stocky-style inventory adjustments. Saving creates or updates an app-local
+// Draft; only the explicit /apply endpoint changes Shopify inventory.
+api.get('/adjustment-options', async (req, res) => {
+  try {
+    res.json({
+      ...await listAdjustmentOptions(),
+      currentStaff: req.ctx.staff,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.get('/adjustment-items', async (req, res) => {
+  try {
+    res.json({
+      rows: await searchAdjustmentItems({
+        term: req.query.q,
+        locationId: req.query.locationId,
+      }),
+    });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.get('/adjustments.csv', async (req, res) => {
+  try {
+    const csv = await adjustmentsCsv(req.query);
+    res.set({
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="inventory-adjustments-${new Date().toISOString().slice(0, 10)}.csv"`,
+    }).send(`\ufeff${csv}`);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.get('/adjustments', async (req, res) => {
+  try {
+    res.json(await listAdjustments(req.query));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.post('/adjustments', async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    const id = await saveAdjustmentDraft({
+      input: req.body,
+      staffId: req.ctx.staff?.id,
+    });
+    res.status(201).json({ id, adjustment: await getAdjustment(id) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.get('/adjustments/:id', async (req, res) => {
+  try {
+    const adjustment = await getAdjustment(req.params.id);
+    if (!adjustment) return res.status(404).json({ error: '调整单不存在' });
+    res.json({ adjustment });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.put('/adjustments/:id', async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    const id = await saveAdjustmentDraft({
+      id: req.params.id,
+      input: req.body,
+      staffId: req.ctx.staff?.id,
+    });
+    res.json({ id, adjustment: await getAdjustment(id) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.post('/adjustments/:id/apply', async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    res.json(await applyAdjustment({
+      id: req.params.id,
+      ctx: { shop: req.ctx.shop, token: req.ctx.token },
+      staffId: req.ctx.staff.id,
+    }));
+  } catch (e) { res.status(409).json({ error: e.message }); }
+});
+
+api.post('/adjustments/:id/archive', async (req, res) => {
+  try {
+    await archiveAdjustment(req.params.id);
+    res.json({ archived: true });
+  } catch (e) { res.status(409).json({ error: e.message }); }
+});
+
+api.post('/adjustment-reasons', async (req, res) => {
+  try {
+    res.status(201).json({ reason: await createAdjustmentReason(req.body) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.patch('/adjustment-reasons/:id', async (req, res) => {
+  try {
+    res.json({ reason: await updateAdjustmentReason(req.params.id, req.body) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.patch('/staff/:id', async (req, res) => {
+  try {
+    res.json({ staff: await updateStaff(req.params.id, req.body) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Items list/search with business filters, inventory totals and last change.

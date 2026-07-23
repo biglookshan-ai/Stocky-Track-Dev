@@ -1,19 +1,27 @@
 # 进度 · Inventory
 
-- **状态**: 开发中 · P1 商品与修改记录进入真实店验收
-- **进度**: 78%
-- **一句话**: 商品查找、库存状态、历史修改和对账复核已串成紧凑流程：Barcode 优先、五状态库存、事件详情和多商品明细已可验收。
+- **状态**: 开发中 · P2 库存调整进入安全验收
+- **进度**: 86%
+- **一句话**: Stocky 风格库存调整已完成 Draft、Barcode 搜索、多商品明细、原因/员工、并发保护、幂等提交、归档与 CSV，等待受控 SKU 写入验收。
 - **分类**: Shopify App
 
 ## 🔨 进行中
-- P1 真实店验收：等待 180 天历史回填完成，抽查 Barcode、事件详情、Collection、前后台链接、订单/员工/App 归因和多状态数量
+- P2 受控验收：先检查 Draft 全流程，再选择测试 SKU 做 `+1 / -1` 回滚，核对 Shopify Adjustment history、修改记录和最终库存
+- P1 持续验收：等待 180 天历史回填完成，抽查 Barcode、事件详情、Collection、前后台链接、订单/员工/App 归因和多状态数量
 
 ## ⏭ 下一步
-- P2：Stocky 风格调整单（仓位、多 SKU、原因、员工、备注、归档、CSV）
+- P2.1：根据真实调整验收反馈优化扫码连续录入和错误提示
 - P3：Stocky 历史导入 + 虚拟库存
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 新增「库存调整」工作区：列表筛选、状态、原因、员工、仓位、商品数、合计变化及详情
+- 新建/编辑 Draft 支持 Barcode、SKU、标题和 Brand 搜索，多商品增减及 Before / Change / After 预览
+- 提交 Shopify 前二次确认并重新读取当前 Available；使用 `changeFromQuantity` 阻止覆盖并发修改
+- Shopify 2026-04 mutation 使用持久幂等键；网络状态未知可安全重试，成功后锁定为 Applied
+- Adjustment reasons 支持方向和启停，员工 user ID 可映射显示名；调整单支持归档与筛选后 CSV 导出
+- 本地即时记录只确认本次 Available 写入，其余库存状态等待 Shopify Webhook / ShopifyQL 真值回传，避免重复推算
+- 新增调整输入、原因映射、并发 mutation input 与 CSV 转义单元测试
 - 商品列表将 Barcode、SKU、Brand 合并到标题下方，腾出空间集中展示 Unavailable、Committed、Available、On hand、Incoming
 - 首页与告警中的商品编号统一为无标签紧凑格式，仅 Barcode 加粗
 - 修改记录的商品文字/变体数量整体可点击进入详情，仅保留箭头提示

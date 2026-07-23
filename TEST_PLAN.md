@@ -1,4 +1,4 @@
-# CGP Inventory · P0/P1 人工验收
+# CGP Inventory · P0/P1/P2 人工验收
 
 本轮测试目标是确认“商品容易找到”“库存数字可信”和“修改记录可追溯”。先在测试 SKU 上操作，
 每次修改后最多等待 5 分钟；测试完成后把库存改回原值。
@@ -67,7 +67,42 @@
 
 通过标准：两次操作各出现一次、没有重复，最终库存恢复原值，首页能看到最新商品。
 
-## 6. 结果反馈
+## 6. P2 库存调整（先 Draft，后受控写入）
+
+### 6.1 不改库存的安全检查
+
+1. 打开「库存调整」，确认可以按状态、Adjustment reason、员工筛选，并可导出 CSV。
+2. 展开「Adjustment reasons 与员工名称」，确认预置原因存在；把当前测试账号的 user ID 改为真实姓名并保存。
+3. 点击「新建调整」，选择仓位和 `Manual adjustment`。
+4. 扫描或输入测试商品 Barcode，确认结果同时显示商品、Barcode、SKU、Brand 和当前 Available。
+5. 添加两个商品，分别输入 `+1`、`-1`，确认 After 计算正确。
+6. 保存 Draft，打开详情后再进入编辑，确认内容完整；此阶段 Shopify 库存必须完全不变。
+7. 归档这张测试 Draft。
+
+通过标准：Draft 可创建、编辑、查看、归档；Barcode 查找准确；保存 Draft 不改变 Shopify。
+
+### 6.2 真实写入（仅使用可回滚的测试 SKU）
+
+1. 选择一个明确允许测试、当前没有订单或其他 App 同步的 SKU，记录仓位和 Available 原值。
+2. 新建单商品 Draft，Reason 选 `Manual adjustment`，Notes 写 `CGP Inventory UAT +1`，Change 填 `+1`。
+3. 详情页核对 Before / Change / After 后点击「提交到 Shopify」，在二次确认中再次核对。
+4. 打开 Shopify 商品库存和 Adjustment history，确认 Available 增加 1，来源、原因和引用可追溯。
+5. 在本应用「修改记录」和商品详情确认对应事件只出现一次。
+6. 新建第二张调整把同一 SKU `-1` 恢复，Notes 写 `CGP Inventory UAT rollback`。
+7. 再次核对 Shopify 和本应用，确认最终 Available 回到原值，首页最近修改商品出现该 SKU。
+
+通过标准：两张调整都只应用一次，Created by / 原因 / 引用正确，最终库存恢复原值。
+
+### 6.3 并发保护
+
+1. 建立一张 `+1` Draft，但不要提交。
+2. 先在 Shopify 后台手动改变同一 SKU 的 Available。
+3. 回到旧 Draft 点击提交。
+
+通过标准：应用提交前会读取最新库存并更新本次 Before / After；若 Shopify 在最后校验时又被并发修改，
+mutation 必须停止而不能覆盖他人的新数量。网络状态未知时页面显示“安全重试”，重试不得重复调整。
+
+## 7. 结果反馈
 
 若发现差异，请截图 Shopify 与 CGP Inventory 的同一条记录，并提供：
 

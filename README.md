@@ -4,7 +4,7 @@ CineGearPro 自研库存管理 app。核心是**全生命周期库存账本**：
 webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 ShopifyQL 对账）→
 每日快照层（对账自愈）。完整计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)。
 
-## 架构（M0 + M1 已实现）
+## 架构（M0 + M1 + M2 调整已实现）
 
 - `src/server.js` — Express 入口 + 调度器（webhook 5s / 归因 2min / ShopifyQL 5min / 快照每日）
 - `src/auth-embedded.js` — App Bridge session token → token exchange（同 search-panel）
@@ -14,6 +14,8 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/inventory-history.js` — ShopifyQL 调整历史同步；员工/App/原因/引用/库存状态归并
 - `src/snapshot.js` — 每日全量拉取 = 快照 + 漂移对账自愈
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
+- `src/adjustments.js` — 调整单 Draft / 提交 / 幂等重试 / 归档 / 原因与员工映射 / CSV
+- `src/adjustment-core.js` — 调整输入校验、Shopify reason 映射和 mutation input 纯逻辑
 - `migrations/` — 全部表结构（含 M2/M3 的调整/盘点/虚拟库存/BOM，先建好）
 
 当前业务界面支持 Brand、Collection、Available 和最近库存修改时间筛选/排序；
@@ -22,6 +24,11 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 为第一识别字段，Barcode、SKU、Brand 紧凑显示在标题下方；商品列表重点展示
 Unavailable、Committed、Available、On hand、Incoming。全店每条修改事件均可展开查看
 涉及商品、仓位和各库存状态变化，多商品事件也会列出完整明细。
+
+「库存调整」支持 Stocky 风格的多商品 Draft：按 Barcode / SKU / 标题搜索、选择仓位和
+Adjustment reason、记录员工和备注、预览 Before / Change / After，再经二次确认写入
+Shopify。提交使用持久幂等键和 `changeFromQuantity` 原值校验，网络结果未知时可安全重试，
+并支持状态筛选、归档及 CSV 导出。
 
 ## 部署（Railway）
 
@@ -63,8 +70,8 @@ npm test               # 纯逻辑单元测试（无需数据库）
 ## 关键设计约定（改代码前必读）
 
 - **账本 append-only**：业务字段绝不 UPDATE；修正靠追加 reconciliation 行。
-- **我们自己的写操作**（M2 调整等）先更 current_levels + 直写账本，webhook 回声
-  算出 delta=0 自然跳过；竞态由每日快照自愈。
+- **我们自己的写操作**（M2 调整等）成功后只即时确认 Available 并直写对应账本；
+  On hand 等其他状态以 Shopify webhook / ShopifyQL 回传为准，避免并发回声造成重复推算。
 - **webhook 只落库就返回 200**，一切处理在后台 tick（appproxy 教训）。
 - **ShopifyQL 是审计主数据源**：webhook 负责低延迟触发；ShopifyQL 负责员工/App、原因、引用单据和多状态归因，并按外部 change ID 幂等去重。
 - **快照逐项自愈**：每日核对 8 个库存状态，任何漂移都追加 reconciliation 行并生成告警。

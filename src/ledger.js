@@ -4,9 +4,9 @@
 // Write paths:
 //  · webhook inventory_levels/update → recordLevelUpdate() (delta vs current)
 //  · our own adjustments (M2) write ledger rows directly at apply time and
-//    update current_levels FIRST — so the webhook echo computes delta 0 and
-//    records nothing. If the echo races us, the daily snapshot reconciliation
-//    heals the double-count.
+//    confirm the returned Available value in current_levels. The webhook echo
+//    then computes delta 0; all other inventory states come from Shopify's
+//    queried webhook payload rather than local arithmetic.
 //  · snapshot reconciliation → recordReconciliation()
 import { q } from './db.js';
 import { INVENTORY_STATES } from './catalog.js';

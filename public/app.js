@@ -18,6 +18,22 @@ async function api(path, opts = {}) {
   return j;
 }
 
+async function apiDownload(path, filename) {
+  let token = '';
+  try { token = await window.shopify.idToken(); }
+  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(await res.blob());
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
 
@@ -538,6 +554,328 @@ async function viewHistoryEvent(id) {
     </div>`;
 }
 
+const ADJUSTMENT_STATUS = {
+  draft: 'Draft',
+  applying: 'Submitting',
+  applied: 'Applied',
+  archived: 'Archived',
+};
+const adjustmentStatus = (status) =>
+  `<span class="status-pill adjustment-${esc(status)}">${ADJUSTMENT_STATUS[status] || esc(status)}</span>`;
+const adjustmentNumber = (number) => `ADJ-${String(number || 0).padStart(5, '0')}`;
+
+async function viewAdjustments() {
+  const options = await api('/adjustment-options');
+  let page = 1;
+  app.innerHTML = `
+    <div class="page-heading">
+      <div><h1>库存调整</h1><p class="muted">建立可审核的 Draft，并在确认后写入 Shopify Available 库存。</p></div>
+      <div class="button-group"><button id="adjustments-export" class="secondary">导出 CSV</button><a class="button" href="#/adjustments/new">新建调整</a></div>
+    </div>
+    <div class="card">
+      <div class="adjustment-filters">
+        <input id="adjustment-q" type="search" placeholder="搜索编号、Barcode、SKU 或商品…">
+        <select id="adjustment-status"><option value="">全部状态</option>
+          <option value="draft">Draft</option><option value="applying">Submitting</option>
+          <option value="applied">Applied</option><option value="archived">Archived</option>
+        </select>
+        <select id="adjustment-reason"><option value="">全部原因</option>${options.reasons.map((reason) => `<option value="${reason.id}">${esc(reason.name)}</option>`).join('')}</select>
+        <select id="adjustment-staff"><option value="">全部员工</option>${options.staff.map((person) => `<option value="${person.id}">${esc(person.display_name)}</option>`).join('')}</select>
+        <button id="adjustment-filter" class="secondary">应用</button>
+      </div>
+      <div id="adjustments-out">加载中…</div>
+      <div id="adjustments-pagination" class="pagination"></div>
+    </div>
+    <details class="card system-details" id="adjustment-settings">
+      <summary>Adjustment reasons 与员工名称</summary>
+      <div class="settings-grid">
+        <section>
+          <div class="section-heading"><div><h2>Adjustment reasons</h2><p class="muted compact">停用后不会出现在新调整单中，历史记录仍保留。</p></div></div>
+          <div class="reason-list">${options.reasons.map((reason) => `<div class="setting-row">
+            <input type="text" value="${esc(reason.name)}" data-reason-name="${reason.id}">
+            <select data-reason-direction="${reason.id}">
+              <option value="any" ${reason.direction === 'any' ? 'selected' : ''}>Increase / decrease</option>
+              <option value="in" ${reason.direction === 'in' ? 'selected' : ''}>Increase only</option>
+              <option value="out" ${reason.direction === 'out' ? 'selected' : ''}>Decrease only</option>
+            </select>
+            <label><input type="checkbox" data-reason-active="${reason.id}" ${reason.active ? 'checked' : ''}> Active</label>
+            <button class="secondary small-button save-reason" data-id="${reason.id}">保存</button>
+          </div>`).join('')}</div>
+          <div class="setting-row new-reason"><input id="new-reason-name" type="text" placeholder="New reason">
+            <select id="new-reason-direction"><option value="any">Increase / decrease</option><option value="in">Increase only</option><option value="out">Decrease only</option></select>
+            <button id="add-reason" class="secondary small-button">添加</button></div>
+        </section>
+        <section>
+          <div class="section-heading"><div><h2>员工名称</h2><p class="muted compact">把 Shopify user ID 映射为修改记录中显示的姓名。</p></div></div>
+          <div class="staff-list">${options.staff.map((person) => `<div class="setting-row">
+            <span class="muted staff-id">${esc(person.shopify_user_id || '—')}</span>
+            <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}">
+            <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
+          </div>`).join('') || '<p class="muted">员工首次打开应用后会自动出现在这里。</p>'}</div>
+        </section>
+      </div>
+    </details>`;
+
+  const query = () => new URLSearchParams({
+    q: $('#adjustment-q').value,
+    status: $('#adjustment-status').value,
+    reasonId: $('#adjustment-reason').value,
+    staffId: $('#adjustment-staff').value,
+  });
+  const load = async () => {
+    $('#adjustments-out').innerHTML = '加载中…';
+    const params = query();
+    params.set('page', page);
+    params.set('limit', '25');
+    const result = await api(`/adjustments?${params}`);
+    $('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
+      <thead><tr><th>Adjustment</th><th>Status</th><th>Reason</th><th>Created by</th><th>Location</th><th class="num">Items</th><th class="num">Total change</th><th>Created</th><th></th></tr></thead>
+      <tbody>${result.rows.map((row) => `<tr>
+        <td><a class="item-link" href="#/adjustments/${row.id}"><strong>${adjustmentNumber(row.number)}</strong></a>${row.notes ? `<div class="muted small">${esc(row.notes)}</div>` : ''}</td>
+        <td>${adjustmentStatus(row.status)}${row.apply_error ? `<div class="error small">${esc(row.apply_error)}</div>` : ''}</td>
+        <td>${esc(row.reason || '—')}</td><td>${esc(row.staff_name || '—')}</td><td>${esc(row.locations || '—')}</td>
+        <td class="num">${row.line_count}</td><td class="num"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
+        <td>${fmtDate(row.created_at)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看 ${adjustmentNumber(row.number)}">→</a></td>
+      </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
+    const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
+    $('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
+      <button id="adjustments-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+      <span>第 ${page} / ${pages} 页 · 共 ${result.total} 张</span>
+      <button id="adjustments-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : `<span class="muted">共 ${result.total} 张</span>`;
+    if ($('#adjustments-prev')) $('#adjustments-prev').onclick = () => { page--; load(); };
+    if ($('#adjustments-next')) $('#adjustments-next').onclick = () => { page++; load(); };
+  };
+  const filter = () => { page = 1; load(); };
+  $('#adjustment-filter').onclick = filter;
+  $('#adjustment-status').onchange = filter;
+  $('#adjustment-reason').onchange = filter;
+  $('#adjustment-staff').onchange = filter;
+  $('#adjustment-q').addEventListener('keydown', (event) => { if (event.key === 'Enter') filter(); });
+  $('#adjustments-export').onclick = async (event) => {
+    event.target.disabled = true;
+    try { await apiDownload(`/adjustments.csv?${query()}`, `inventory-adjustments-${new Date().toISOString().slice(0, 10)}.csv`); }
+    catch (error) { alert(`导出失败：${error.message}`); }
+    finally { event.target.disabled = false; }
+  };
+  document.querySelectorAll('.save-reason').forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await api(`/adjustment-reasons/${button.dataset.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            name: $(`[data-reason-name="${button.dataset.id}"]`).value,
+            direction: $(`[data-reason-direction="${button.dataset.id}"]`).value,
+            active: $(`[data-reason-active="${button.dataset.id}"]`).checked,
+          }),
+        });
+        await viewAdjustments();
+        $('#adjustment-settings').open = true;
+      } catch (error) { alert(`保存失败：${error.message}`); button.disabled = false; }
+    };
+  });
+  document.querySelectorAll('.save-staff').forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await api(`/staff/${button.dataset.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ displayName: $(`[data-staff-name="${button.dataset.id}"]`).value }),
+        });
+        await viewAdjustments();
+        $('#adjustment-settings').open = true;
+      } catch (error) { alert(`保存失败：${error.message}`); button.disabled = false; }
+    };
+  });
+  $('#add-reason').onclick = async (event) => {
+    event.target.disabled = true;
+    try {
+      await api('/adjustment-reasons', {
+        method: 'POST',
+        body: JSON.stringify({ name: $('#new-reason-name').value, direction: $('#new-reason-direction').value }),
+      });
+      await viewAdjustments();
+      $('#adjustment-settings').open = true;
+    } catch (error) { alert(`添加失败：${error.message}`); event.target.disabled = false; }
+  };
+  await load();
+}
+
+async function viewAdjustmentForm(id = null) {
+  app.innerHTML = '<div class="card">加载中…</div>';
+  const [options, detail] = await Promise.all([
+    api('/adjustment-options'),
+    id ? api(`/adjustments/${id}`) : Promise.resolve(null),
+  ]);
+  const adjustment = detail?.adjustment;
+  if (adjustment && adjustment.status !== 'draft') {
+    location.hash = `#/adjustments/${id}`;
+    return;
+  }
+  let lines = (adjustment?.lines || []).map((line) => ({
+    itemId: line.item_id,
+    product_title: line.product_title,
+    variant_title: line.variant_title,
+    barcode: line.barcode,
+    sku: line.sku,
+    vendor: line.vendor,
+    available: Number(line.current_available ?? line.qty_before),
+    delta: Number(line.delta),
+  }));
+  app.innerHTML = `
+    <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number)}` : '新建库存调整'}</h1>
+      <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div><a class="back-link" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">← 返回</a></div>
+    <div class="card adjustment-form">
+      <div class="form-grid">
+        <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
+        <label><span>Adjustment reason</span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
+        <label class="notes-field"><span>Notes</span><input id="draft-notes" type="text" maxlength="2000" value="${esc(adjustment?.notes || '')}" placeholder="可选：填写原因、票据或内部说明"></label>
+      </div>
+      <div class="item-picker">
+        <div><h2>添加商品</h2><p class="muted compact">以 Barcode 为主要识别编号，也可搜索 SKU、标题或 Brand。</p></div>
+        <div class="picker-search"><input id="draft-item-search" type="search" placeholder="扫描或输入 Barcode / SKU / 商品"><button id="draft-item-find" class="secondary">搜索</button></div>
+      </div>
+      <div id="draft-search-results"></div>
+      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">Before 为当前 Available；After 会随调整数量计算。</p></div></div>
+      <div id="draft-lines"></div>
+      <div class="form-actions"><a class="button secondary" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">取消</a><button id="save-draft">保存 Draft</button></div>
+    </div>`;
+
+  const renderLines = () => {
+    $('#draft-lines').innerHTML = lines.length ? `<div class="table-scroll"><table class="adjustment-lines">
+      <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th><th></th></tr></thead>
+      <tbody>${lines.map((line, index) => `<tr>
+        <td><span class="event-product-title">${productName(line)}</span>${codeMeta(line)}</td>
+        <td class="num">${line.available}</td>
+        <td class="num"><input class="delta-input" type="number" step="1" value="${line.delta}" data-delta="${index}" aria-label="调整数量"></td>
+        <td class="num"><strong class="${line.delta > 0 ? 'pos' : line.delta < 0 ? 'neg' : ''}">${line.available + Number(line.delta || 0)}</strong></td>
+        <td><button class="secondary small-button remove-adjustment-line" data-index="${index}">移除</button></td>
+      </tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">尚未添加商品。</div>';
+    document.querySelectorAll('[data-delta]').forEach((input) => {
+      input.oninput = () => {
+        lines[Number(input.dataset.delta)].delta = Number(input.value);
+        const after = input.closest('tr').querySelector('td:nth-child(4) strong');
+        after.textContent = String(lines[Number(input.dataset.delta)].available + Number(input.value || 0));
+        after.className = Number(input.value) > 0 ? 'pos' : Number(input.value) < 0 ? 'neg' : '';
+      };
+    });
+    document.querySelectorAll('.remove-adjustment-line').forEach((button) => {
+      button.onclick = () => { lines.splice(Number(button.dataset.index), 1); renderLines(); };
+    });
+  };
+  const findItems = async () => {
+    const term = $('#draft-item-search').value.trim();
+    if (!term) return;
+    $('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
+    try {
+      const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
+      $('#draft-search-results').innerHTML = result.rows.length ? `<div class="search-results">${result.rows.map((row) => `
+        <button class="search-result" data-item="${row.id}">
+          <span><strong>${productName(row)}</strong>${codeMeta(row)}</span><span>Available <strong>${row.available}</strong> · 添加</span>
+        </button>`).join('')}</div>` : '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
+      document.querySelectorAll('.search-result').forEach((button) => {
+        button.onclick = () => {
+          const row = result.rows.find((item) => item.id === Number(button.dataset.item));
+          if (lines.some((line) => line.itemId === row.id)) return alert('该商品已在调整明细中');
+          const reason = $('#draft-reason').selectedOptions[0];
+          const delta = reason?.dataset.direction === 'out' ? -1 : 1;
+          lines.push({ itemId: row.id, ...row, available: Number(row.available), delta });
+          $('#draft-search-results').innerHTML = '';
+          $('#draft-item-search').value = '';
+          renderLines();
+        };
+      });
+    } catch (error) { $('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+  };
+  $('#draft-item-find').onclick = findItems;
+  $('#draft-item-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') findItems(); });
+  $('#draft-location').onchange = () => {
+    if (!lines.length || confirm('更改仓位会清空当前调整明细，是否继续？')) {
+      lines = [];
+      $('#draft-search-results').innerHTML = '';
+      renderLines();
+    } else {
+      $('#draft-location').value = String(adjustment?.lines?.[0]?.location_id || options.locations[0]?.id || '');
+    }
+  };
+  $('#save-draft').onclick = async (event) => {
+    event.target.disabled = true;
+    try {
+      const body = {
+        locationId: Number($('#draft-location').value),
+        reasonId: Number($('#draft-reason').value),
+        notes: $('#draft-notes').value,
+        lines: lines.map((line) => ({ itemId: line.itemId, delta: Number(line.delta) })),
+      };
+      const result = await api(id ? `/adjustments/${id}` : '/adjustments', {
+        method: id ? 'PUT' : 'POST',
+        body: JSON.stringify(body),
+      });
+      location.hash = `#/adjustments/${result.id}`;
+    } catch (error) { alert(`保存失败：${error.message}`); event.target.disabled = false; }
+  };
+  renderLines();
+}
+
+async function viewAdjustment(id) {
+  app.innerHTML = '<div class="card">加载中…</div>';
+  const { adjustment } = await api(`/adjustments/${id}`);
+  const total = adjustment.lines.reduce((sum, line) => sum + Number(line.delta), 0);
+  const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
+  app.innerHTML = `
+    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number)}</h1><p class="muted">库存调整详情与 Shopify 写入状态。</p></div>
+      <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
+        ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
+        ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
+        ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
+      </div></div>
+    ${adjustment.apply_error ? `<div class="notice adjustment-error"><strong>上次提交信息：</strong>${esc(adjustment.apply_error)}</div>` : ''}
+    <div class="card event-overview adjustment-overview">
+      <div><span>Status</span><strong>${adjustmentStatus(adjustment.status)}</strong></div>
+      <div><span>Adjustment reason</span><strong>${esc(adjustment.reason || '—')}</strong></div>
+      <div><span>Created by</span><strong>${esc(adjustment.staff_name || '—')}</strong></div>
+      <div><span>Location</span><strong>${esc(adjustment.lines[0]?.location || '—')}</strong></div>
+      <div><span>Total change</span><strong class="${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}">${signed(total)}</strong></div>
+      <div><span>${adjustment.applied_at ? 'Applied' : 'Created'}</span><strong>${fmtDate(adjustment.applied_at || adjustment.created_at)}</strong></div>
+    </div>
+    <div class="card">
+      <div class="card-heading"><div><h2>调整明细</h2><p class="muted compact">Barcode 为主要识别编号；数量均为 Available。</p></div></div>
+      <div class="table-scroll"><table class="adjustment-lines">
+        <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th></tr></thead>
+        <tbody>${adjustment.lines.map((line) => `<tr>
+          <td><a class="item-link" href="#/items/${line.item_id}">${productName(line)}</a>${codeMeta(line)}</td>
+          <td class="num">${line.qty_before}</td><td class="num"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
+          <td class="num"><strong>${line.qty_after}</strong>${adjustment.status === 'draft' && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">当前 ${line.current_available}，提交时会重新校验</div>` : ''}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+      ${adjustment.notes ? `<div class="adjustment-notes"><strong>Notes</strong><p>${esc(adjustment.notes)}</p></div>` : ''}
+    </div>
+    ${canApply ? '<div class="notice"><strong>提交前确认：</strong>这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。</div>' : ''}`;
+  if ($('#apply-adjustment')) $('#apply-adjustment').onclick = async (event) => {
+    const message = adjustment.status === 'applying'
+      ? '将使用同一个幂等键安全重试，不会重复调整。是否继续？'
+      : `即将把 ${adjustment.lines.length} 个商品的 Available 库存合计调整 ${signed(total)}。这会真实写入 Shopify，是否确认？`;
+    if (!confirm(message)) return;
+    event.target.disabled = true;
+    event.target.textContent = '提交中…';
+    try {
+      await api(`/adjustments/${id}/apply`, { method: 'POST' });
+      await viewAdjustment(id);
+    } catch (error) {
+      alert(`提交失败：${error.message}`);
+      await viewAdjustment(id);
+    }
+  };
+  if ($('#archive-adjustment')) $('#archive-adjustment').onclick = async (event) => {
+    if (!confirm('归档后调整单将锁定，不能再次编辑或提交，是否继续？')) return;
+    event.target.disabled = true;
+    try {
+      await api(`/adjustments/${id}/archive`, { method: 'POST' });
+      await viewAdjustment(id);
+    } catch (error) { alert(`归档失败：${error.message}`); event.target.disabled = false; }
+  };
+}
+
 // ---- router ----
 async function route() {
   const hash = location.hash || '#/dashboard';
@@ -547,8 +885,14 @@ async function route() {
     if (m) return await viewItem(m[1]);
     const historyEvent = hash.match(/^#\/history\/(\d+)/);
     if (historyEvent) return await viewHistoryEvent(historyEvent[1]);
+    const adjustmentEdit = hash.match(/^#\/adjustments\/(\d+)\/edit$/);
+    if (adjustmentEdit) return await viewAdjustmentForm(adjustmentEdit[1]);
+    const adjustment = hash.match(/^#\/adjustments\/(\d+)$/);
+    if (adjustment) return await viewAdjustment(adjustment[1]);
+    if (hash === '#/adjustments/new') return await viewAdjustmentForm();
     if (hash.startsWith('#/items')) return await viewItems();
     if (hash.startsWith('#/history')) return await viewHistory();
+    if (hash.startsWith('#/adjustments')) return await viewAdjustments();
     if (hash.startsWith('#/system')) return await viewSystem();
     return await viewDashboard();
   } catch (e) {
