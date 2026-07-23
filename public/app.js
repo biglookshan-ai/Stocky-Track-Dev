@@ -105,7 +105,8 @@ const historyTable = (rows, shopHandle, empty = '暂无修改记录') => `
   </table></div>`;
 const productName = (row) => `${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}`;
 const primaryCode = (row) => row.barcode || '—';
-const codeMeta = (row) => `<div class="product-code"><strong>Barcode ${esc(row.barcode || '—')}</strong>${row.sku ? `<span>SKU ${esc(row.sku)}</span>` : ''}</div>`;
+const codeMeta = (row) => `<div class="product-code"><strong>${esc(row.barcode || '—')}</strong>${row.sku ? `<span>${esc(row.sku)}</span>` : ''}${row.vendor ? `<span>${esc(row.vendor)}</span>` : ''}</div>`;
+const stockValue = (value) => value === null || value === undefined ? '<span class="muted">—</span>' : esc(value);
 const changeValue = (delta, after) => {
   if (delta === null || delta === undefined) return '<span class="muted">—</span>';
   const n = Number(delta);
@@ -310,11 +311,14 @@ async function viewItems() {
       const { rows } = result;
       $('#items-summary').textContent = `共 ${result.total} 个商品变体`;
       $('#items-out').innerHTML = rows.length ? `
-        <div class="table-scroll"><table class="items-table"><thead><tr><th>商品</th><th>Barcode</th><th>SKU</th><th>Brand</th><th class="num">Available</th><th>最近库存修改</th><th>最近修改时间</th></tr></thead>
+        <div class="table-scroll"><table class="items-table"><thead><tr><th>商品</th><th class="num">Unavailable</th><th class="num">Committed</th><th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th><th>最近库存修改</th><th>最近修改时间</th></tr></thead>
         <tbody>${rows.map((r) => `<tr>
-          <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">本地</span>' : ''}</td>
-          <td><strong>${esc(r.barcode || '—')}</strong></td><td>${esc(r.sku || '—')}</td><td>${esc(r.vendor)}</td>
-          <td class="num">${r.total_available}</td>
+          <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">本地</span>' : ''}${codeMeta(r)}</td>
+          <td class="num">${stockValue(r.total_unavailable)}</td>
+          <td class="num">${stockValue(r.total_committed)}</td>
+          <td class="num">${stockValue(r.total_available)}</td>
+          <td class="num">${stockValue(r.total_on_hand)}</td>
+          <td class="num">${stockValue(r.total_incoming)}</td>
           <td>${r.last_changed_at ? esc(lastInventoryChange(r)) : '<span class="muted">暂无记录</span>'}<div class="muted small">${r.last_activity ? esc(activityLabel(r.last_activity)) : ''}</div></td>
           <td>${fmtDate(r.last_changed_at)}</td></tr>`).join('')}</tbody></table></div>` : '无结果。';
       const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
@@ -374,7 +378,7 @@ async function viewItem(id) {
         ${links.storefront ? `<a class="button secondary" href="${esc(links.storefront)}" target="_blank" rel="noopener">查看前台商品 ↗</a>` : '<span class="button secondary disabled">前台未发布</span>'}
         ${links.admin ? `<a class="button" href="${esc(links.admin)}" target="_blank" rel="noopener">打开 Shopify 后台 ↗</a>` : ''}
       </div></div>
-      <p class="muted"><strong>Barcode ${esc(item.barcode) || '—'}</strong> · SKU ${esc(item.sku) || '—'} · ${esc(item.vendor)} · 零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</p>
+      <div class="product-detail-meta">${codeMeta(item)}<span>零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</span></div>
       <div class="product-summary">
         <div><span>Available</span><strong>${totalAvailable}</strong></div>
         <div><span>Last inventory change</span><strong>${lastChange ? esc(lastInventoryChange(lastChange)) : 'No history'}</strong></div>
@@ -481,11 +485,11 @@ async function viewHistory() {
           <thead><tr><th>Date</th><th>Activity</th><th>Created by</th><th>Product</th><th>Location</th><th>Reference</th></tr></thead>
           <tbody>${result.rows.map((row) => {
             const product = row.product_count === 1
-              ? `<a class="item-link" href="#/items/${row.item_id}">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</a>${codeMeta(row)}`
+              ? `<span class="event-product-title">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</span>${codeMeta(row)}`
               : `<strong>${row.product_count} 个商品变体</strong>`;
             return `<tr><td>${fmtDate(row.occurred_at)}</td>
               <td><span class="activity">${esc(activityLabel(row.activity))}</span><div>${srcBadge(row.source_type)}</div></td>
-              <td>${actorCell(row)}</td><td>${product}<div><a class="detail-link" href="#/history/${row.id}">查看本次修改详情 →</a></div></td><td>${esc(row.locations)}</td>
+              <td>${actorCell(row)}</td><td><a class="history-event-link" href="#/history/${row.id}" title="查看本次修改详情">${product}<span class="history-arrow" aria-hidden="true">→</span></a></td><td>${esc(row.locations)}</td>
               <td>${referenceCell(row, result.shopHandle)}</td></tr>`;
           }).join('') || '<tr><td colspan="6" class="muted">暂无修改记录</td></tr>'}</tbody>
         </table></div>

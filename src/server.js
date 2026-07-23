@@ -392,7 +392,13 @@ api.get('/items', async (req, res) => {
     const [count, rows] = await Promise.all([
       q(`SELECT count(*)::int total FROM items i WHERE ${where}`, [...args]),
       q(`WITH stock AS (
-           SELECT item_id, COALESCE(sum(available), 0)::int AS total_available
+           SELECT item_id,
+                  sum(available)::int AS total_available,
+                  sum(on_hand)::int AS total_on_hand,
+                  sum(committed)::int AS total_committed,
+                  sum(incoming)::int AS total_incoming,
+                  CASE WHEN sum(on_hand) IS NULL OR sum(available) IS NULL THEN NULL
+                       ELSE (sum(on_hand) - sum(available))::int END AS total_unavailable
            FROM current_levels GROUP BY item_id
          ),
          event_items AS (
@@ -412,6 +418,8 @@ api.get('/items', async (req, res) => {
          SELECT i.id, i.product_title, i.variant_title, i.sku, i.barcode,
                 i.vendor, i.price, i.source, i.shopify_product_gid,
                 COALESCE(stock.total_available, 0)::int AS total_available,
+                stock.total_unavailable, stock.total_committed,
+                stock.total_on_hand, stock.total_incoming,
                 latest.occurred_at AS last_changed_at, latest.activity AS last_activity,
                 latest.staff_name, latest.app_name, latest.source_type,
                 latest.available_delta, latest.on_hand_delta, latest.available_after
@@ -617,6 +625,7 @@ api.get('/history', async (req, res) => {
                 min(i.variant_title) AS variant_title,
                 min(i.sku) AS sku,
                 min(i.barcode) AS barcode,
+                min(i.vendor) AS vendor,
                 string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
          FROM inventory_events e
          JOIN inventory_ledger lg ON lg.event_id=e.id
@@ -679,7 +688,7 @@ api.get('/alerts', async (req, res) => {
   try {
     const rows = await q(`
       SELECT ra.id, ra.snap_date, ra.state, ra.expected, ra.actual, ra.created_at,
-             i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode,
+             i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode, i.vendor,
              i.shopify_product_gid, loc.name AS location
       FROM reconcile_alerts ra
       JOIN items i ON i.id=ra.item_id

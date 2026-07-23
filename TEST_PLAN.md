@@ -21,10 +21,11 @@
 1. 打开「商品」，确认默认按最近库存修改时间从新到旧排列。
 2. 分别测试 Brand、Collection 下拉筛选。
 3. 分别测试 Available 高到低/低到高、Brand A–Z、商品名称 A–Z。
-4. 使用 Barcode 搜索一个已知商品，确认列表显示 Barcode、SKU、Available、最近库存修改和最近修改时间；Barcode 应位于 SKU 前。
-5. 打开商品，分别点击「查看前台商品」和「打开 Shopify 后台」。
+4. 使用 Barcode 搜索一个已知商品，确认 Barcode、SKU、Brand 紧凑显示在商品标题下方，Barcode 加粗且三者不显示字段标签。
+5. 对比商品列表的 Unavailable、Committed、Available、On hand、Incoming 与 Shopify 当前库存。
+6. 打开商品，分别点击「查看前台商品」和「打开 Shopify 后台」。
 
-通过标准：筛选结果正确；翻页可用；Barcode 与 Shopify 一致；两个按钮打开同一商品的正确页面。未发布商品允许显示「前台未发布」。
+通过标准：筛选结果正确；翻页可用；编号与五个库存状态和 Shopify 一致；两个按钮打开同一商品的正确页面。未发布商品允许显示「前台未发布」。
 
 ## 3. 当前库存状态对比
 
@@ -49,7 +50,7 @@
 
 然后打开全店「修改记录」：
 
-1. 点击任意一条记录的「查看本次修改详情」。
+1. 点击任意一条记录的商品文字、商品变体数量或右侧箭头。
 2. 确认详情包含操作时间、Activity、Created by、Reference，以及商品、Barcode、SKU、仓位和各库存状态变化。
 3. 选择一条显示多个商品变体的 Transfer / Order 事件，确认详情列出了所有涉及商品，而不是只显示数量。
 
