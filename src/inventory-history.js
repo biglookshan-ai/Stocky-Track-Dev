@@ -143,10 +143,10 @@ async function queryWindow(ctx, start, end, depth = 0) {
     throw new Error(`ShopifyQL history window overflow at ${isoSecond(start)} (${rows.length}+ rows)`);
   }
   const mid = new Date(Math.floor((startMs + endMs) / 2));
-  const [left, right] = await Promise.all([
-    queryWindow(ctx, new Date(startMs), mid, depth + 1),
-    queryWindow(ctx, mid, new Date(endMs), depth + 1),
-  ]);
+  // Keep splits sequential. Parallel recursive queries exhaust ShopifyQL's
+  // minute bucket and cause every retry to wake at the same reset boundary.
+  const left = await queryWindow(ctx, new Date(startMs), mid, depth + 1);
+  const right = await queryWindow(ctx, mid, new Date(endMs), depth + 1);
   const unique = new Map();
   for (const row of [...left, ...right]) unique.set(externalChangeId(row), row);
   return [...unique.values()];
@@ -292,19 +292,25 @@ export async function runHistorySync(ctx, {
   const state = await getState('inventory_history_sync');
   const end = until ? new Date(until) : new Date();
   const defaultStart = new Date(+end - days * 86400000);
-  // Two-minute overlap handles reporting lag and inclusive boundaries.
-  const resumeBackfill = !incremental && state?.mode === 'backfill'
-    && state?.cursor && +new Date(state.cursor) < +end;
-  const cursorStart = (incremental || resumeBackfill) && state?.cursor
-    ? new Date(+new Date(state.cursor) - 120000)
-    : defaultStart;
-  const start = since ? new Date(since) : cursorStart;
-  if (!Number.isFinite(+start) || !Number.isFinite(+end) || start >= end) {
+  const requestedStart = since ? new Date(since) : defaultStart;
+  if (!Number.isFinite(+requestedStart) || !Number.isFinite(+end) || requestedStart >= end) {
     throw new Error('invalid inventory history date range');
   }
 
   const mode = incremental ? 'incremental' : 'backfill';
-  const syncStart = resumeBackfill ? state.start : start.toISOString();
+  const direction = incremental ? 'forward' : 'backward';
+  // Incremental runs overlap two minutes. Backfills run newest-first so the
+  // product screen becomes useful immediately, then continue towards day 180.
+  const incrementalStart = incremental && state?.mode === 'incremental' && state?.cursor
+    ? new Date(+new Date(state.cursor) - 120000)
+    : requestedStart;
+  const resumeBackfill = !incremental && state?.mode === 'backfill'
+    && state?.direction === 'backward' && state?.cursor
+    && +new Date(state.cursor) > +requestedStart;
+  const backfillEnd = resumeBackfill
+    ? new Date(Math.min(+end, +new Date(state.cursor) + 120000))
+    : end;
+  const syncStart = requestedStart.toISOString();
   let fetched = 0, inserted = 0, matched = 0, skipped = 0;
   const [itemRows, locationRows] = await Promise.all([
     q('SELECT id, shopify_inventory_item_gid FROM items WHERE shopify_inventory_item_gid IS NOT NULL'),
@@ -315,8 +321,8 @@ export async function runHistorySync(ctx, {
     locations: new Map(locationRows.rows.map((row) => [row.shopify_gid, row.id])),
     events: new Map(),
   };
-  for (let windowStart = +start; windowStart < +end; windowStart += 86400000) {
-    const windowEnd = Math.min(windowStart + 86400000, +end);
+
+  const consumeWindow = async (windowStart, windowEnd, running, cursor) => {
     const rows = await queryWindow(ctx, new Date(windowStart), new Date(windowEnd));
     fetched += rows.length;
     const enriched = await enrichGroups(ctx, rows);
@@ -327,14 +333,30 @@ export async function runHistorySync(ctx, {
       else skipped++;
     }
     await setState('inventory_history_sync', {
-      cursor: new Date(windowEnd).toISOString(),
+      cursor: new Date(cursor).toISOString(),
       fetched, inserted, matched, skipped,
-      running: windowEnd < +end, mode, start: syncStart,
+      running, mode, direction, start: syncStart,
+      heartbeat: new Date().toISOString(),
     });
+  };
+
+  if (incremental) {
+    for (let windowStart = +incrementalStart; windowStart < +end; windowStart += 86400000) {
+      const windowEnd = Math.min(windowStart + 86400000, +end);
+      await consumeWindow(windowStart, windowEnd, windowEnd < +end, windowEnd);
+    }
+  } else {
+    for (let windowEnd = +backfillEnd; windowEnd > +requestedStart;) {
+      const windowStart = Math.max(+requestedStart, windowEnd - 86400000);
+      await consumeWindow(windowStart, windowEnd, windowStart > +requestedStart, windowStart);
+      windowEnd = windowStart;
+    }
   }
   const summary = {
-    cursor: end.toISOString(), fetched, inserted, matched, skipped,
-    finishedAt: new Date().toISOString(), running: false, mode, start: syncStart,
+    cursor: incremental ? end.toISOString() : requestedStart.toISOString(),
+    fetched, inserted, matched, skipped,
+    finishedAt: new Date().toISOString(), running: false,
+    mode, direction, start: syncStart,
   };
   await setState('inventory_history_sync', summary);
   return summary;
