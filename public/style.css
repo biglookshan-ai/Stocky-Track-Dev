@@ -98,7 +98,9 @@ details.card[open] summary { margin-bottom: 12px; }
 .event-overview > div:last-child { border-right: 0; }
 .event-overview span { display: block; color: var(--sub); font-size: 11.5px; margin-bottom: 4px; }
 .event-overview strong { display: block; line-height: 1.45; }
-.event-detail-table { min-width: 1120px; }
+.event-detail-table { min-width: 1030px; }
+.event-detail-table th:nth-child(n+5),
+.event-detail-table td:nth-child(n+5) { white-space: nowrap; }
 @media (max-width: 800px) {
   .overview-grid, .system-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sync-list, .health-grid, .event-overview { grid-template-columns: 1fr; }
