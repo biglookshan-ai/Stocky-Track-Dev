@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 
 process.env.SHOPIFY_API_SECRET = 'testsecret';
-const { verifyHmac } = await import('../src/webhooks.js');
+const { normalizeAppUrl, verifyHmac } = await import('../src/webhooks.js');
 
 test('verifyHmac accepts a correctly signed body', () => {
   const body = Buffer.from(JSON.stringify({ inventory_item_id: 1, available: 5 }));
@@ -19,4 +19,12 @@ test('verifyHmac rejects a tampered body', () => {
 
 test('verifyHmac rejects a missing header', () => {
   assert.equal(verifyHmac(Buffer.from('x'), undefined), false);
+});
+
+test('normalizeAppUrl adds HTTPS to a Railway hostname', () => {
+  assert.equal(
+    normalizeAppUrl('stocky-track-dev-production.up.railway.app/'),
+    'https://stocky-track-dev-production.up.railway.app',
+  );
+  assert.equal(normalizeAppUrl('https://example.com/'), 'https://example.com');
 });

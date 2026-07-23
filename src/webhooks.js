@@ -139,8 +139,14 @@ const TOPICS = [
   'ORDERS_CREATE', 'REFUNDS_CREATE',
 ];
 
+export function normalizeAppUrl(value) {
+  const trimmed = String(value || '').trim().replace(/\/+$/, '');
+  if (!trimmed) throw new Error('APP_URL is empty');
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}
+
 export async function registerAll(ctx, appUrl) {
-  const url = `${appUrl.replace(/\/$/, '')}/webhooks`;
+  const url = `${normalizeAppUrl(appUrl)}/webhooks`;
   const results = [];
   for (const topic of TOPICS) {
     const data = await graphql(ctx, `
