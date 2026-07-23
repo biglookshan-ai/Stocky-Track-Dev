@@ -1,4 +1,5 @@
-// Minimal embedded SPA (M0): status dashboard + items + ledger.
+// Embedded SPA: business-facing inventory audit with technical health tucked
+// behind an explicit system-status section.
 // App Bridge (CDN) provides window.shopify.idToken() for session tokens.
 
 const $ = (sel) => document.querySelector(sel);
@@ -19,20 +20,89 @@ async function api(path, opts = {}) {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
-const deltaCell = (n) => `<td class="num ${n > 0 ? 'pos' : n < 0 ? 'neg' : ''}">${n > 0 ? '+' : ''}${n}</td>`;
 
 const SOURCE_LABEL = {
-  sale: '销售', refund: '退货入库', adjustment: '调整', stocktake: '盘点', import: '历史导入',
-  reconciliation: '对账修正', external_app: '外部 App', admin_manual: '人工调整',
-  order: '订单', transfer: '调拨', unknown: '待归因', bundle_op: '组套',
+  sale: 'Sale', refund: 'Return', adjustment: 'Adjustment', stocktake: 'Stocktake',
+  import: 'Historical import', reconciliation: 'Reconciliation', external_app: 'App',
+  admin_manual: 'Staff', order: 'Order', transfer: 'Transfer',
+  unknown: 'Pending attribution', bundle_op: 'Bundle',
 };
 const srcBadge = (s) => `<span class="badge ${esc(s)}">${SOURCE_LABEL[s] || esc(s)}</span>`;
+const ACTIVITY_LABEL = {
+  manual_adjustment: 'Manually adjusted',
+  manually_adjusted: 'Manually adjusted',
+  order_fulfilled: 'Order fulfilled',
+  purchase: 'Purchased',
+  purchase_order_received: 'Purchase order received',
+  correction: 'Inventory correction',
+  inventory_correction: 'Inventory correction',
+  count: 'Inventory manually counted',
+  inventory_count: 'Inventory manually counted',
+  received: 'Inventory received',
+  return_restock: 'Items restocked',
+  damaged: 'Damaged',
+  theft_or_loss: 'Theft or loss',
+  promotion_or_donation: 'Promotion or donation',
+  data_correction: 'Data correction',
+  transfer_created: 'Transfer created',
+  removed_from_location: 'Removed from location',
+  reservation_created: 'Reservation created',
+  reservation_updated: 'Reservation updated',
+  reservation_deleted: 'Reservation deleted',
+  other: 'Other',
+};
+const activityLabel = (value) => {
+  const key = String(value || 'other').trim().toLowerCase();
+  return ACTIVITY_LABEL[key]
+    || key.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
 const signed = (n) => `${Number(n) > 0 ? '+' : ''}${Number(n)}`;
 const historyCell = (change) => {
   if (!change || change.qty_after === null) return '<td class="num muted">—</td>';
   const delta = Number(change.delta || 0);
   return `<td class="num"><span class="${delta > 0 ? 'pos' : delta < 0 ? 'neg' : 'muted'}">(${signed(delta)})</span> ${change.qty_after}</td>`;
 };
+const actorCell = (row) => {
+  const name = row.created_by || row.staff_name || row.app_name || 'Shopify';
+  const kind = row.staff_name ? 'Staff' : row.app_name ? 'App' : 'System';
+  return `${esc(name)}<div class="muted small">${kind}</div>`;
+};
+const gidParts = (uri) => {
+  const match = String(uri || '').match(/^gid:\/\/shopify\/([^/]+)\/(.+)$/i);
+  return match ? { type: match[1], id: match[2] } : null;
+};
+const referenceCell = (row, shopHandle) => {
+  const ref = gidParts(row.reference_document_uri);
+  const type = row.reference_document_type || ref?.type;
+  const id = row.reference_document_id || ref?.id;
+  if (!type && !id) return '<span class="muted">—</span>';
+  const labels = { Order: 'Order', PurchaseOrder: 'Purchase order', Transfer: 'Transfer' };
+  const label = labels[type] || String(type || 'Reference').replace(/([a-z])([A-Z])/g, '$1 $2');
+  if (type === 'Order' && id && shopHandle) {
+    const url = `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/orders/${encodeURIComponent(id)}`;
+    return `<a class="reference-link" href="${url}" target="_blank" rel="noopener">${esc(label)} #${esc(id)} ↗</a>`;
+  }
+  return `${esc(label)}${id ? ` #${esc(id)}` : ''}`;
+};
+const eventRows = (rows, shopHandle) => rows.map((event) => `<tr>
+  <td>${fmtDate(event.occurred_at)}</td>
+  <td><span class="activity">${esc(activityLabel(event.activity))}</span><div>${srcBadge(event.source_type)}</div></td>
+  <td>${actorCell(event)}</td>
+  ${historyCell(event.changes.unavailable)}
+  ${historyCell(event.changes.committed)}
+  ${historyCell(event.changes.available)}
+  ${historyCell(event.changes.on_hand)}
+  ${historyCell(event.changes.incoming)}
+  <td>${esc(event.location)}<div class="small">${referenceCell(event, shopHandle)}</div></td>
+</tr>`).join('');
+const historyTable = (rows, shopHandle, empty = '暂无修改记录') => `
+  <div class="table-scroll"><table class="history-table">
+    <thead><tr><th>Date</th><th>Activity</th><th>Created by</th>
+      <th class="num">Unavailable</th><th class="num">Committed</th>
+      <th class="num">Available</th><th class="num">On hand</th>
+      <th class="num">Incoming</th><th>Location / reference</th></tr></thead>
+    <tbody>${eventRows(rows, shopHandle) || `<tr><td colspan="9" class="muted">${empty}</td></tr>`}</tbody>
+  </table></div>`;
 
 // ---- views ----
 
@@ -42,22 +112,46 @@ async function viewDashboard() {
   const snap = s.lastSnapshot;
   const history = s.historySync;
   const backfill = s.historyBackfill;
+  const hasAttention = s.webhookBacklog > 20 || s.pendingAttribution > 100 || s.openAlerts > 0;
+  const coverage = s.events.first ? `${new Date(s.events.first).toLocaleDateString('zh-CN')} 至今` : '尚无记录';
   app.innerHTML = `
-    <div class="grid">
-      <div class="stat"><div class="n">${s.items.n}</div><div class="l">商品变体（本地 ${s.items.local}）</div></div>
-      <div class="stat"><div class="n">${s.ledger.n}</div><div class="l">账本流水行</div></div>
-      <div class="stat ${s.webhookBacklog > 50 ? 'bad' : 'ok'}"><div class="n">${s.webhookBacklog}</div><div class="l">Webhook 待处理</div></div>
-      <div class="stat ${s.pendingAttribution > 200 ? 'warn' : ''}"><div class="n">${s.pendingAttribution}</div><div class="l">待归因</div></div>
-      <div class="stat ${s.openAlerts > 0 ? 'warn' : 'ok'}"><div class="n">${s.openAlerts}</div><div class="l">未处理对账告警</div></div>
+    <div class="page-heading">
+      <div><h1>库存概览</h1><p class="muted">查看商品、修改记录和数据同步状态。</p></div>
+    </div>
+    <div class="grid overview-grid">
+      <a class="stat stat-link" href="#/items"><div class="n">${s.items.n}</div><div class="l">商品 / SKU</div><div class="hint">查看商品与各仓库存</div></a>
+      <a class="stat stat-link" href="#/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
+      <div class="stat"><div class="n range">${coverage}</div><div class="l">已保存的历史范围</div><div class="hint">本地记录长期保留</div></div>
+      <div class="stat ${hasAttention ? 'warn' : 'ok'}"><div class="n">${hasAttention ? '需复核' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? `${s.openAlerts} 条对账提醒` : '实时记录与对账正常'}</div></div>
     </div>
     <div class="card">
-      <h2>初始化（M0 一次性步骤）</h2>
+      <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">系统自动接收 Shopify 修改，并每天核对库存。</p></div>
+        <span class="status-pill ${backfill?.running ? 'running' : 'success'}">${backfill?.running ? '历史同步中' : '自动运行中'}</span>
+      </div>
+      <div class="sync-list">
+        <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；新修改通常几秒内出现。</div></div>
+        <div><strong>每日库存核对</strong><div class="muted">${snap ? `上次完成 ${fmtDate(snap.finishedAt || snap.snapDate)}，自动修正 ${snap.driftHealed} 处差异。` : '尚未完成首次核对。'}</div></div>
+        <div><strong>历史记录</strong><div class="muted">${backfill?.running
+          ? `正在读取 Shopify 最近 180 天，已读取 ${backfill.fetched || 0} 行。`
+          : backfill?.finishedAt ? `最近 180 天已同步完成（${fmtDate(backfill.finishedAt)}）。` : '尚未同步 Shopify 最近 180 天。'}</div></div>
+      </div>
+    </div>
+    <details class="card system-details">
+      <summary>系统状态说明 ${hasAttention ? `<span class="badge unknown">${s.openAlerts} 条需复核</span>` : ''}</summary>
+      <div class="health-grid">
+        <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。通常应为 0，短暂增加后会自动清空。</p></div>
+        <div><strong>归因处理中：${s.pendingAttribution}</strong><p>数量变化已保存，系统正在匹配对应的订单、员工或 App；不会影响库存记录。</p></div>
+        <div><strong>对账提醒：${s.openAlerts}</strong><p>每日核对发现本地推算与 Shopify 实际值曾不同；数量已自动修正，提醒保留供人工复核。</p></div>
+      </div>
+    </details>
+    <details class="card system-details">
+      <summary>维护工具</summary>
       <div class="row">
-        <button id="btn-sync">① 全量同步商品目录</button>
+        <button id="btn-sync">同步商品目录</button>
         <span class="muted">${sync ? (sync.done ? `✅ 已完成：${sync.count} 个变体（${fmtDate(sync.finishedAt)}）` : sync.error ? `❌ 失败：${esc(sync.error)}` : `⏳ 进行中… ${sync.count || 0} 个变体`) : '未运行'}</span>
       </div>
       <div class="row">
-        <button id="btn-webhooks">② 注册 Webhooks</button>
+        <button id="btn-webhooks">重新注册实时接收</button>
         <span class="muted">${s.webhooksRegistered?.error
           ? `❌ ${esc(s.webhooksRegistered.error)}`
           : s.webhooksRegistered
@@ -67,22 +161,19 @@ async function viewDashboard() {
             : '未注册'}</span>
       </div>
       <div class="row">
-        <button id="btn-snapshot" class="secondary">立即跑一次快照/对账</button>
+        <button id="btn-snapshot" class="secondary">立即核对库存</button>
         <span class="muted">${s.snapshotError?.error
           ? `❌ ${esc(s.snapshotError.error)}`
           : snap ? `上次快照 ${snap.snapDate}：${snap.snapshotRows} 行，修复漂移 ${snap.driftHealed}` : '尚无快照'}</span>
       </div>
       <div class="row">
-        <button id="btn-history" class="secondary">同步最近 180 天调整历史</button>
+        <button id="btn-history" class="secondary">同步 Shopify 最近 180 天</button>
         <span class="muted">${backfill ? backfill.running ? `⏳ 历史回填中… 已读取 ${backfill.fetched || 0} 行` : backfill.error ? `❌ ${esc(backfill.error)}` : `历史回填完成 ${fmtDate(backfill.finishedAt)}：新增 ${backfill.inserted || 0}` : '尚未回填'}
         ${history?.finishedAt ? ` · 实时归因 ${fmtDate(history.finishedAt)}` : ''}</span>
       </div>
-      <p class="muted">账本第一天起就在记录：目录同步建立基线 → webhook 记增量 → 每日快照对账自愈。</p>
-    </div>
-    <div class="card">
-      <h2>账本时间范围</h2>
-      <p>${s.ledger.first ? `${fmtDate(s.ledger.first)} → ${fmtDate(s.ledger.last)}` : '暂无流水（等第一笔库存变动进来）'}</p>
-    </div>`;
+      <p class="muted compact">这些工具仅用于安装、恢复或人工复核；日常使用无需点击。</p>
+    </details>
+    <div class="notice"><strong>历史范围说明：</strong>Shopify 商品 Adjustment history 页面提供最近 180 天。本应用会永久保存已经采集或导入的记录；要补齐更早的 Stocky 历史，需要后续导入 Stocky 导出文件。</div>`;
   const guard = (fn) => async (e) => {
     e.target.disabled = true;
     try { await fn(e); }
@@ -154,8 +245,9 @@ function lineChart(series) {
 
 async function viewItem(id) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const { item, levels, ledger, history, series } = await api(`/items/${id}`);
+  const { item, levels, series, shopHandle } = await api(`/items/${id}`);
   app.innerHTML = `
+    <p><a class="back-link" href="#/items">← 返回商品</a></p>
     <div class="card">
       <h2>${esc(item.product_title)}${item.variant_title && item.variant_title !== 'Default Title' ? ` / ${esc(item.variant_title)}` : ''}</h2>
       <p class="muted">SKU ${esc(item.sku) || '—'} · 条码 ${esc(item.barcode) || '—'} · ${esc(item.vendor)} · 零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</p>
@@ -166,51 +258,76 @@ async function viewItem(id) {
       <tbody>${levels.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.unavailable ?? '—'}</td><td class="num">${l.committed ?? '—'}</td><td class="num">${l.available ?? '—'}</td><td class="num">${l.on_hand ?? '—'}</td><td class="num">${l.incoming ?? '—'}</td><td>${fmtDate(l.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">无</td></tr>'}</tbody></table></div>
     </div>
     <div class="card">
-      <div class="card-heading"><h2>库存修改记录（最近 500 次事件）</h2>
+      <div class="card-heading"><div><h2>最近修改记录</h2><p class="muted compact">每行代表一次 Shopify 库存操作；Activity 保留 Shopify 的英文叫法。</p></div>
         <select id="history-location"><option value="">全部仓位</option>${levels.map((l) => `<option value="${esc(l.name)}">${esc(l.name)}</option>`).join('')}</select>
       </div>
-      <div class="table-scroll"><table class="history-table"><thead><tr><th>日期</th><th>活动</th><th>操作人 / App</th><th class="num">不可用</th><th class="num">已承诺</th><th class="num">可用</th><th class="num">在手</th><th class="num">在途</th><th>仓位 / 引用</th></tr></thead>
-      <tbody id="history-body"></tbody></table></div>
-      ${history.length ? '' : '<p class="muted">暂无 Shopify 调整历史。请先在“状态”页同步调整历史，并确认应用具有 read_reports 权限。</p>'}
+      <div id="recent-history">加载中…</div>
     </div>
-    <details class="card"><summary>技术账本流水（最近 500 条）</summary>
-      <div class="table-scroll"><table><thead><tr><th>时间</th><th>仓位</th><th>状态</th><th class="num">±</th><th class="num">变动后</th><th>来源</th><th>原因/单据</th><th>操作人</th><th>备注</th></tr></thead>
-      <tbody>${ledger.map((r) => `<tr>
-        <td>${fmtDate(r.occurred_at)}</td><td>${esc(r.location)}</td><td>${esc(r.state)}</td>${deltaCell(r.delta)}
-        <td class="num">${r.qty_after ?? '—'}</td><td>${srcBadge(r.source_type)}</td>
-        <td>${esc(r.reason_code || r.source_ref || '')}</td><td>${esc(r.staff || '')}</td><td>${esc(r.notes || '')}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">暂无流水</td></tr>'}</tbody></table></div>
-    </details>`;
-  const renderHistory = () => {
+    <div class="card">
+      <div class="card-heading"><div><h2>历史修改记录</h2><p id="history-range" class="muted compact">本地已保存的全部时间范围，可分页查看。</p></div></div>
+      <div id="all-history">加载中…</div>
+      <div id="history-pagination" class="pagination"></div>
+    </div>
+    <div class="notice"><strong>关于历史期限：</strong>Shopify 商品页仅显示最近 180 天；本应用会长期保留已采集记录。当前最早日期取决于首次同步时间，Stocky 更早历史需通过导入补齐。</div>`;
+
+  let historyPage = 1;
+  const loadHistory = async () => {
     const location = $('#history-location').value;
-    const rows = history.filter((event) => !location || event.location === location);
-    $('#history-body').innerHTML = rows.map((event) => `<tr>
-      <td>${fmtDate(event.occurred_at)}</td>
-      <td>${esc(event.activity || '其他')}<div>${srcBadge(event.source_type)}</div></td>
-      <td>${esc(event.created_by || 'Shopify')}</td>
-      ${historyCell(event.changes.unavailable)}
-      ${historyCell(event.changes.committed)}
-      ${historyCell(event.changes.available)}
-      ${historyCell(event.changes.on_hand)}
-      ${historyCell(event.changes.incoming)}
-      <td>${esc(event.location)}${event.reference_document_uri ? `<div class="muted ref">${esc(event.reference_document_uri)}</div>` : ''}</td>
-    </tr>`).join('') || '<tr><td colspan="9" class="muted">该仓位暂无记录</td></tr>';
+    const suffix = location ? `&location=${encodeURIComponent(location)}` : '';
+    $('#recent-history').innerHTML = '加载中…';
+    $('#all-history').innerHTML = '加载中…';
+    const [recent, historical] = await Promise.all([
+      api(`/items/${id}/history?page=1&limit=10${suffix}`),
+      api(`/items/${id}/history?page=${historyPage}&limit=25${suffix}`),
+    ]);
+    $('#recent-history').innerHTML = historyTable(recent.rows, shopHandle, '该仓位暂无修改记录');
+    $('#all-history').innerHTML = historyTable(historical.rows, shopHandle, '该仓位暂无历史修改记录');
+    $('#history-range').textContent = historical.first
+      ? `共 ${historical.total} 条 · ${fmtDate(historical.first)} 至 ${fmtDate(historical.last)}`
+      : '暂无已保存的修改记录';
+    const pages = Math.max(1, Math.ceil(historical.total / historical.pageSize));
+    $('#history-pagination').innerHTML = historical.total > historical.pageSize ? `
+      <button id="history-prev" class="secondary" ${historyPage <= 1 ? 'disabled' : ''}>上一页</button>
+      <span>第 ${historyPage} / ${pages} 页</span>
+      <button id="history-next" class="secondary" ${historyPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
+    if ($('#history-prev')) $('#history-prev').onclick = () => { historyPage--; loadHistory(); };
+    if ($('#history-next')) $('#history-next').onclick = () => { historyPage++; loadHistory(); };
   };
-  $('#history-location').onchange = renderHistory;
-  renderHistory();
+  $('#history-location').onchange = () => { historyPage = 1; loadHistory(); };
+  await loadHistory();
 }
 
-async function viewLedger() {
+async function viewHistory() {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const { rows } = await api('/ledger');
-  app.innerHTML = `
-    <div class="card"><h2>全店最近流水（200 条）</h2>
-      <div class="table-scroll"><table><thead><tr><th>时间</th><th>商品</th><th>仓位</th><th>状态</th><th class="num">±</th><th class="num">变动后</th><th>来源</th><th>操作人 / App</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr>
-        <td>${fmtDate(r.occurred_at)}</td>
-        <td>${esc(r.product_title)}${r.variant_title && r.variant_title !== 'Default Title' ? ` / ${esc(r.variant_title)}` : ''} <span class="muted">${esc(r.sku)}</span></td>
-        <td>${esc(r.location)}</td><td>${esc(r.state)}</td>${deltaCell(r.delta)}<td class="num">${r.qty_after ?? '—'}</td>
-        <td>${srcBadge(r.source_type)}</td><td>${esc(r.actor_name || r.app_name || '')}</td></tr>`).join('') || '<tr><td colspan="8" class="muted">暂无流水</td></tr>'}</tbody></table></div>
-    </div>`;
+  let page = 1;
+  const load = async () => {
+    const result = await api(`/history?page=${page}&limit=50`);
+    const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
+    app.innerHTML = `
+      <div class="page-heading"><div><h1>修改记录</h1><p class="muted">全店库存操作按事件合并显示，可查看操作人、App 和关联订单。</p></div></div>
+      <div class="card">
+        <div class="table-scroll"><table class="store-history">
+          <thead><tr><th>Date</th><th>Activity</th><th>Created by</th><th>Product</th><th>Location</th><th>Reference</th></tr></thead>
+          <tbody>${result.rows.map((row) => {
+            const product = row.product_count === 1
+              ? `<a class="item-link" href="#/items/${row.item_id}">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</a><div class="muted small">${esc(row.sku)}</div>`
+              : `${row.product_count} 个商品变体`;
+            return `<tr><td>${fmtDate(row.occurred_at)}</td>
+              <td><span class="activity">${esc(activityLabel(row.activity))}</span><div>${srcBadge(row.source_type)}</div></td>
+              <td>${actorCell(row)}</td><td>${product}</td><td>${esc(row.locations)}</td>
+              <td>${referenceCell(row, result.shopHandle)}</td></tr>`;
+          }).join('') || '<tr><td colspan="6" class="muted">暂无修改记录</td></tr>'}</tbody>
+        </table></div>
+        <div class="pagination">${result.total > result.pageSize ? `
+          <button id="history-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
+          <span>第 ${page} / ${pages} 页 · 共 ${result.total} 次修改</span>
+          <button id="history-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : `<span class="muted">共 ${result.total} 次修改</span>`}</div>
+      </div>
+      <div class="notice">这里显示的是业务层面的修改事件，不再展示系统内部的逐状态技术流水。商品详情页可查看每次修改对 Available、On hand 等状态的具体影响。</div>`;
+    if ($('#history-prev')) $('#history-prev').onclick = () => { page--; load(); };
+    if ($('#history-next')) $('#history-next').onclick = () => { page++; load(); };
+  };
+  await load();
 }
 
 // ---- router ----
@@ -221,7 +338,7 @@ async function route() {
     const m = hash.match(/^#\/items\/(\d+)/);
     if (m) return await viewItem(m[1]);
     if (hash.startsWith('#/items')) return await viewItems();
-    if (hash.startsWith('#/ledger')) return await viewLedger();
+    if (hash.startsWith('#/history')) return await viewHistory();
     return await viewDashboard();
   } catch (e) {
     app.innerHTML = `<div class="card"><p class="error">${esc(e.message)}</p></div>`;

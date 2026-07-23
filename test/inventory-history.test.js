@@ -47,6 +47,8 @@ test('groups state changes into an Admin-style inventory event', () => {
       event_id: 7, event_occurred_at: '2026-07-23T10:47:00Z',
       activity: 'Correction', event_app_name: 'Bundles.app',
       event_source_type: 'external_app', location: 'External Warehouse',
+      event_reference_uri: 'gid://shopify/Order/123',
+      event_reference_type: 'Order', event_reference_id: '123',
       state: 'available', delta: -1, computed_qty_after: 0,
     },
     {
@@ -63,9 +65,11 @@ test('groups state changes into an Admin-style inventory event', () => {
   }];
   const [event] = groupAuditEvents(rows, levels);
   assert.equal(event.created_by, 'Bundles.app');
+  assert.equal(event.reference_document_uri, 'gid://shopify/Order/123');
+  assert.equal(event.reference_document_type, 'Order');
+  assert.equal(event.reference_document_id, '123');
   assert.deepEqual(event.changes.available, { delta: -1, qty_after: 0 });
   assert.deepEqual(event.changes.on_hand, { delta: -1, qty_after: 0 });
   assert.deepEqual(event.changes.unavailable, { delta: 0, qty_after: 0 });
   assert.deepEqual(event.changes.committed, { delta: 0, qty_after: 0 });
 });
-

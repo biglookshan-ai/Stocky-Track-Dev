@@ -66,6 +66,8 @@ export function groupAuditEvents(rows, levels = []) {
         app_name: row.event_app_name || row.app_name || null,
         staff_name: row.staff_name || null,
         reference_document_uri: row.event_reference_uri || row.reference_document_uri || null,
+        reference_document_type: row.event_reference_type || null,
+        reference_document_id: row.event_reference_id || null,
         source_type: row.event_source_type || row.source_type,
         location: row.location,
         changes: {},
@@ -368,7 +370,10 @@ export async function runHistorySync(ctx, {
     ? new Date(Math.min(+end, +new Date(state.cursor) + 120000))
     : end;
   const syncStart = requestedStart.toISOString();
-  let fetched = 0, inserted = 0, matched = 0, skipped = 0;
+  let fetched = resumeBackfill ? Number(state.fetched || 0) : 0;
+  let inserted = resumeBackfill ? Number(state.inserted || 0) : 0;
+  let matched = resumeBackfill ? Number(state.matched || 0) : 0;
+  let skipped = resumeBackfill ? Number(state.skipped || 0) : 0;
   const [itemRows, locationRows] = await Promise.all([
     q('SELECT id, shopify_inventory_item_gid FROM items WHERE shopify_inventory_item_gid IS NOT NULL'),
     q('SELECT id, shopify_gid FROM locations WHERE shopify_gid IS NOT NULL'),

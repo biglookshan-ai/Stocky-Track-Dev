@@ -23,12 +23,14 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 2. Railway: 新项目 → Deploy from GitHub → 加 **Postgres** 插件 → 加 **Volume** 挂 `/data`
 3. 环境变量：见 `.env.example`（`APP_URL` 填 Railway 域名；`DATABASE_URL` 由 Railway 注入）
 4. Dev Dashboard 把 App URL 指向 Railway 域名 → 商店安装 → 从 Shopify 后台打开 app
-5. 应用内「状态」页依次点：**① 全量同步商品目录** → **② 注册 Webhooks**
-6. 在状态页运行一次「同步最近 180 天调整历史」
+5. 应用内「首页 → 维护工具」依次运行：**同步商品目录** → **重新注册实时接收**
+6. 在维护工具运行一次「同步 Shopify 最近 180 天」
 7. 之后账本自动记录；每 5 分钟补充完整归因，每日 03:00 UTC 快照对账（`SNAPSHOT_HOUR` 可调）
 
 首次 180 天历史回填会受 ShopifyQL 分钟配额限制并在后台断点续传；默认每次查询间隔
-16 秒（`SHOPIFYQL_PACE_MS` 可调），最近记录优先写入。
+16 秒（`SHOPIFYQL_PACE_MS` 可调），最近记录优先写入。进程部署或重启后会从数据库游标
+自动续跑；已写入本地的记录长期保留，因此随着应用运行可查询超过 180 天的历史。
+首次同步以前的 Stocky 历史不会自动出现，需要通过后续的 Stocky CSV 导入补齐。
 
 ## 本地开发
 
@@ -41,9 +43,9 @@ npm test               # 纯逻辑单元测试（无需数据库）
 
 ## M0 验收清单
 
-- [ ] 初始同步完成（~9500 变体，状态页显示数量）
+- [ ] 初始同步完成（~9500 变体，首页显示数量）
 - [ ] Webhooks 全部注册成功（9 个 topic）
-- [ ] 团队在 Stocky/POS 里的真实操作出现在账本流水（来源=待归因/销售）
+- [ ] 团队在 Stocky/POS 里的真实操作出现在修改记录（Created by 和引用单据正确）
 - [ ] 连续 3 天快照 driftHealed = 0（或漂移可解释）
 - [ ] /healthz 返回 ok 且 backlog 不增长
 - [ ] 抽查商品的 Available / On hand / Committed / Incoming 与 Shopify 一致
@@ -59,4 +61,6 @@ npm test               # 纯逻辑单元测试（无需数据库）
 - **webhook 只落库就返回 200**，一切处理在后台 tick（appproxy 教训）。
 - **ShopifyQL 是审计主数据源**：webhook 负责低延迟触发；ShopifyQL 负责员工/App、原因、引用单据和多状态归因，并按外部 change ID 幂等去重。
 - **快照逐项自愈**：每日核对 8 个库存状态，任何漂移都追加 reconciliation 行并生成告警。
+- **业务记录与技术账本分离**：UI 按一次修改事件合并显示并分页；底层逐状态账本继续
+  append-only 保存，不作为日常操作界面暴露。
 - inventory mutations 必须带幂等 key（2026-04 强制）：`shopify.js → idempotencyKey()`。

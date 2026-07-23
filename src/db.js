@@ -58,17 +58,23 @@ export async function setState(key, value) {
            ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, ts = now()`, [key, JSON.stringify(value)]);
 }
 
-// Best-effort distributed lock via sync_state (single web instance, but this
-// also guards against overlapping cron ticks).
-export async function withLock(name, maxAgeMs, fn) {
-  const key = `lock:${name}`;
-  const now = Date.now();
-  const cur = await getState(key);
-  if (cur && cur.until > now) return { skipped: true };
-  await setState(key, { until: now + maxAgeMs });
+// Session-scoped advisory locks disappear automatically if a process restarts.
+// A dedicated client must be held for the whole job because advisory locks are
+// attached to the Postgres session, not to an individual query.
+export async function withLock(name, _maxAgeMs, fn) {
+  const client = await pool.connect();
   try {
+    const lock = await client.query(
+      'SELECT pg_try_advisory_lock(hashtext($1)) AS locked',
+      [name],
+    );
+    if (!lock.rows[0].locked) return { skipped: true };
     return { skipped: false, result: await fn() };
   } finally {
-    await setState(key, { until: 0 });
+    await client.query(
+      'SELECT pg_advisory_unlock(hashtext($1))',
+      [name],
+    ).catch(() => {});
+    client.release();
   }
 }
