@@ -67,11 +67,11 @@ a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: 
 .product-summary > div { padding: 10px 12px; border-radius: 8px; background: var(--bg); }
 .product-summary span { display: block; color: var(--sub); font-size: 12px; }
 .product-summary strong { display: block; margin-top: 3px; }
-.items-table { min-width: 920px; table-layout: fixed; }
-.items-table th:first-child { width: 300px; }
-.items-table th:nth-child(n+2):nth-child(-n+6) { width: 74px; }
-.items-table th:nth-child(7) { width: 140px; }
-.items-table th:nth-child(8) { width: 110px; }
+.items-table { min-width: 860px; table-layout: fixed; }
+.items-table th:first-child { width: 280px; }
+.items-table th:nth-child(n+2):nth-child(-n+6) { width: 68px; }
+.items-table th:nth-child(7) { width: 130px; }
+.items-table th:nth-child(8) { width: 100px; }
 .items-table td:nth-child(7) { overflow-wrap: anywhere; }
 .recent-products { min-width: 860px; }
 .system-stat-grid { margin-bottom: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
