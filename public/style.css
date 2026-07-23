@@ -138,6 +138,7 @@ details.card[open] summary { margin-bottom: 12px; }
 .item-picker { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .picker-search { display: flex; align-items: center; gap: 8px; }
 .picker-search input { width: min(420px, 48vw); }
+.adjustment-form #draft-search-results + .section-heading { margin-top: 18px; }
 .search-results { max-height: 310px; overflow-y: auto; margin: 10px 0 18px; border: 1px solid var(--border); border-radius: 8px; }
 button.search-result { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 10px 12px; color: var(--text); background: #fff; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; }
 button.search-result:last-child { border-bottom: 0; }
