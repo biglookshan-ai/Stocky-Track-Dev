@@ -5,6 +5,7 @@ import {
   csvCell,
   normalizeAdjustmentInput,
 } from './adjustment-core.js';
+import { listAdjustmentAttachments } from './adjustment-attachments.js';
 
 const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'stocky-track-dev';
 
@@ -198,7 +199,7 @@ export async function listAdjustments(filters = {}) {
 
 export async function getAdjustment(id) {
   const adjustmentId = Number(id);
-  const [header, lines] = await Promise.all([
+  const [header, lines, attachments] = await Promise.all([
     q(`SELECT a.*, r.name AS reason, r.direction,
               s.display_name AS staff_name, s.shopify_user_id
        FROM adjustments a
@@ -215,9 +216,10 @@ export async function getAdjustment(id) {
        LEFT JOIN current_levels cl ON cl.item_id=al.item_id AND cl.location_id=al.location_id
        WHERE al.adjustment_id=$1
        ORDER BY al.id`, [adjustmentId]),
+    listAdjustmentAttachments(adjustmentId),
   ]);
   if (!header.rowCount) return null;
-  return { ...header.rows[0], lines: lines.rows };
+  return { ...header.rows[0], lines: lines.rows, attachments };
 }
 
 async function prepareApply(id, shop, applyingStaffId) {

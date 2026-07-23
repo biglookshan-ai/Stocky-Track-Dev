@@ -34,6 +34,93 @@ async function apiDownload(path, filename) {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 }
 
+async function apiBlob(path) {
+  let token = '';
+  try { token = await window.shopify.idToken(); }
+  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
+  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
+async function apiUploadAttachment(adjustmentId, file) {
+  let token = '';
+  try { token = await window.shopify.idToken(); }
+  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
+  const res = await fetch(`/api/adjustments/${adjustmentId}/attachments`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': file.type || 'application/octet-stream',
+      'X-File-Name': encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body.attachment;
+}
+
+const formatBytes = (bytes) => {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+};
+let mediaObjectUrls = [];
+const clearMediaObjectUrls = () => {
+  mediaObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  mediaObjectUrls = [];
+};
+const attachmentListHtml = (attachments = [], editable = false) => attachments.length
+  ? `<div class="attachment-list">${attachments.map((attachment) => {
+    const media = attachment.content_type.startsWith('image/');
+    return `<div class="attachment-item">
+      ${media ? `<div class="attachment-preview" data-attachment-preview="${attachment.id}"></div>` : '<span class="attachment-file-icon">📎</span>'}
+      <div class="attachment-meta">
+        <button class="attachment-open" data-attachment-open="${attachment.id}" data-filename="${esc(attachment.original_name)}" data-content-type="${esc(attachment.content_type)}">${esc(attachment.original_name)}</button>
+        <span>${esc(formatBytes(attachment.size_bytes))}${attachment.uploaded_by_name ? ` · ${esc(attachment.uploaded_by_name)}` : ''}</span>
+      </div>
+      ${editable ? `<button class="secondary small-button attachment-delete" data-attachment-delete="${attachment.id}">移除</button>` : ''}
+    </div>`;
+  }).join('')}</div>`
+  : '<p class="muted compact">暂无附件。</p>';
+
+async function wireAttachmentActions(adjustmentId, attachments = []) {
+  document.querySelectorAll('[data-attachment-open]').forEach((button) => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        const blob = await apiBlob(`/adjustments/${adjustmentId}/attachments/${button.dataset.attachmentOpen}`);
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob);
+        if (/^(image|video)\//.test(button.dataset.contentType) || button.dataset.contentType === 'application/pdf') {
+          window.open(link.href, '_blank', 'noopener');
+          setTimeout(() => URL.revokeObjectURL(link.href), 60_000);
+        } else {
+          link.download = button.dataset.filename;
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+        }
+      } catch (error) { alert(`下载失败：${error.message}`); }
+      finally { button.disabled = false; }
+    };
+  });
+  await Promise.all(attachments.filter((attachment) => attachment.content_type.startsWith('image/')).map(async (attachment) => {
+    const host = document.querySelector(`[data-attachment-preview="${attachment.id}"]`);
+    if (!host) return;
+    try {
+      const blob = await apiBlob(`/adjustments/${adjustmentId}/attachments/${attachment.id}`);
+      const url = URL.createObjectURL(blob);
+      mediaObjectUrls.push(url);
+      host.innerHTML = `<img src="${url}" alt="${esc(attachment.original_name)}">`;
+    } catch { host.innerHTML = '<span class="muted small">预览不可用</span>'; }
+  }));
+}
+
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
 
@@ -128,6 +215,23 @@ const changeValue = (delta, after) => {
   const n = Number(delta);
   const value = after === null || after === undefined ? '' : ` ${after}`;
   return `<span class="${n > 0 ? 'pos' : n < 0 ? 'neg' : 'muted'}">(${signed(n)})</span>${value}`;
+};
+const historyDetailValue = (delta, after) => {
+  if (delta === null || delta === undefined) return '<span class="not-provided">未提供</span>';
+  return changeValue(delta, after);
+};
+const INVENTORY_STATE_LABEL = {
+  available: 'Available', on_hand: 'On hand', unavailable: 'Unavailable',
+  committed: 'Committed', incoming: 'Incoming', in_transit: 'In transit',
+  reserved: 'Reserved', damaged: 'Damaged', safety_stock: 'Safety stock',
+};
+const rawStateSummary = (row) => {
+  const standard = new Set(['available', 'on_hand', 'unavailable', 'committed', 'incoming']);
+  const changes = Array.isArray(row.state_changes) ? row.state_changes.filter((change) => !standard.has(change.state)) : [];
+  if (!changes.length) return '';
+  return `<div class="raw-state-list">${changes.map((change) =>
+    `${esc(INVENTORY_STATE_LABEL[change.state] || activityLabel(change.state))} ${signed(change.delta)}${change.qty_after === null ? '' : ` → ${esc(change.qty_after)}`}`
+  ).join(' · ')}</div>`;
 };
 const lastInventoryChange = (row) => {
   const available = row.available_delta;
@@ -526,7 +630,7 @@ async function viewHistoryEvent(id) {
   const { event, rows, shopHandle } = await api(`/history/${id}`);
   app.innerHTML = `
     <div class="page-heading">
-      <div><h1>修改记录详情</h1><p class="muted">查看本次操作涉及的全部商品与各库存状态变化。</p></div>
+      <div><h1>修改记录详情</h1><p class="muted">查看本次操作涉及的全部商品与 Shopify 返回的库存状态变化。</p></div>
       <a class="back-link" href="#/history">← 返回修改记录</a>
     </div>
     <div class="card event-overview">
@@ -541,17 +645,25 @@ async function viewHistoryEvent(id) {
         <thead><tr><th>商品</th><th>Barcode</th><th>SKU</th><th>Location</th>
           <th class="num">Unavailable</th><th class="num">Committed</th>
           <th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th></tr></thead>
-        <tbody>${rows.map((row) => `<tr>
-          <td><a class="item-link" href="#/items/${row.item_id}">${productName(row)}</a></td>
+        <tbody>${rows.map((row) => {
+          const standardMissing = ['unavailable', 'committed', 'available', 'on_hand', 'incoming']
+            .every((state) => row[`${state}_delta`] === null || row[`${state}_delta`] === undefined);
+          return `<tr>
+          <td><a class="item-link" href="#/items/${row.item_id}">${productName(row)}</a>
+            ${rawStateSummary(row)}
+            ${standardMissing ? '<div class="missing-state-note">此工作流事件未返回表中 5 个标准状态；实际数量变化通常记录在同一操作的相邻事件。</div>' : ''}
+          </td>
           <td><strong>${esc(primaryCode(row))}</strong></td><td>${esc(row.sku || '—')}</td><td>${esc(row.location)}</td>
-          <td class="num">${changeValue(row.unavailable_delta, row.unavailable_after)}</td>
-          <td class="num">${changeValue(row.committed_delta, row.committed_after)}</td>
-          <td class="num">${changeValue(row.available_delta, row.available_after)}</td>
-          <td class="num">${changeValue(row.on_hand_delta, row.on_hand_after)}</td>
-          <td class="num">${changeValue(row.incoming_delta, row.incoming_after)}</td>
-        </tr>`).join('') || '<tr><td colspan="9" class="muted">该事件没有商品明细</td></tr>'}</tbody>
+          <td class="num">${historyDetailValue(row.unavailable_delta, row.unavailable_after)}</td>
+          <td class="num">${historyDetailValue(row.committed_delta, row.committed_after)}</td>
+          <td class="num">${historyDetailValue(row.available_delta, row.available_after)}</td>
+          <td class="num">${historyDetailValue(row.on_hand_delta, row.on_hand_after)}</td>
+          <td class="num">${historyDetailValue(row.incoming_delta, row.incoming_after)}</td>
+        </tr>`;
+        }).join('') || '<tr><td colspan="9" class="muted">该事件没有商品明细</td></tr>'}</tbody>
       </table></div>
-    </div>`;
+    </div>
+    <div class="notice"><strong>“未提供”不是 0：</strong>它表示 Shopify 在这条工作流事件中没有返回该库存状态。Transfer 等操作可能拆分成多条相邻事件，只有包含实际数量变化的事件才会显示数字。</div>`;
 }
 
 const ADJUSTMENT_STATUS = {
@@ -722,42 +834,82 @@ async function viewAdjustmentForm(id = null) {
     available: Number(line.current_available ?? line.qty_before),
     delta: Number(line.delta),
   }));
+  let pendingFiles = [];
   app.innerHTML = `
     <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number)}` : '新建库存调整'}</h1>
       <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div><a class="back-link" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">← 返回</a></div>
     <div class="card adjustment-form">
-      <div class="form-grid">
+      <div class="form-grid adjustment-basics">
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
         <label><span>Adjustment reason</span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
-        <label class="notes-field"><span>Notes</span><input id="draft-notes" type="text" maxlength="2000" value="${esc(adjustment?.notes || '')}" placeholder="可选：填写原因、票据或内部说明"></label>
+        <label class="notes-field"><span>Notes</span><textarea id="draft-notes" maxlength="10000" rows="4" placeholder="详细填写调整原因、票据编号、处理过程或内部说明">${esc(adjustment?.notes || '')}</textarea></label>
+        <div class="evidence-field">
+          <span>Evidence attachments</span>
+          <div class="evidence-picker"><input id="draft-attachments" type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"><label for="draft-attachments" class="button secondary">添加图片、视频或文件</label></div>
+          <p class="muted small">每个文件最大 50 MB，每张调整单最多 20 个；保存 Draft 后上传，不会写入 Shopify。</p>
+          <div id="pending-attachments"></div>
+          ${id ? `<div id="existing-attachments">${attachmentListHtml(adjustment.attachments, true)}</div>` : ''}
+        </div>
       </div>
       <div class="item-picker">
         <div><h2>添加商品</h2><p class="muted compact">以 Barcode 为主要识别编号，也可搜索 SKU、标题或 Brand。</p></div>
         <div class="picker-search"><input id="draft-item-search" type="search" placeholder="扫描或输入 Barcode / SKU / 商品"><button id="draft-item-find" class="secondary">搜索</button></div>
       </div>
       <div id="draft-search-results"></div>
-      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">Before 为当前 Available；After 会随调整数量计算。</p></div></div>
+      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">选择 − 或 +，再输入变化数量；After 会根据当前 Available 自动计算。</p></div></div>
       <div id="draft-lines"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">取消</a><button id="save-draft">保存 Draft</button></div>
     </div>`;
 
+  const selectedDirection = () => $('#draft-reason').selectedOptions[0]?.dataset.direction || 'any';
+  const normalizeLineDirection = (line) => {
+    const magnitude = Math.max(1, Math.abs(Number(line.delta) || 1));
+    if (selectedDirection() === 'out') line.delta = -magnitude;
+    else if (selectedDirection() === 'in') line.delta = magnitude;
+    else line.delta = Number(line.delta) < 0 ? -magnitude : magnitude;
+  };
+  const renderPendingFiles = () => {
+    $('#pending-attachments').innerHTML = pendingFiles.length
+      ? `<div class="pending-files">${pendingFiles.map((file, index) => `<span>${esc(file.name)} · ${formatBytes(file.size)} <button class="pending-file-remove" data-pending-remove="${index}" aria-label="移除附件">×</button></span>`).join('')}</div>`
+      : '';
+    document.querySelectorAll('[data-pending-remove]').forEach((button) => {
+      button.onclick = () => { pendingFiles.splice(Number(button.dataset.pendingRemove), 1); renderPendingFiles(); };
+    });
+  };
   const renderLines = () => {
+    lines.forEach(normalizeLineDirection);
+    const direction = selectedDirection();
     $('#draft-lines').innerHTML = lines.length ? `<div class="table-scroll"><table class="adjustment-lines">
-      <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th><th></th></tr></thead>
+      <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change (+ / −)</th><th class="num">After</th><th></th></tr></thead>
       <tbody>${lines.map((line, index) => `<tr>
         <td><span class="event-product-title">${productName(line)}</span>${codeMeta(line)}</td>
         <td class="num">${line.available}</td>
-        <td class="num"><input class="delta-input" type="number" step="1" value="${line.delta}" data-delta="${index}" aria-label="调整数量"></td>
+        <td class="num"><div class="delta-control">
+          <button type="button" class="delta-sign ${line.delta < 0 ? 'active minus' : ''}" data-sign="-1" data-index="${index}" ${direction === 'in' ? 'disabled' : ''} aria-label="减少库存">−</button>
+          <input class="delta-input" type="number" min="1" step="1" value="${Math.abs(line.delta)}" data-magnitude="${index}" aria-label="变化数量">
+          <button type="button" class="delta-sign ${line.delta > 0 ? 'active plus' : ''}" data-sign="1" data-index="${index}" ${direction === 'out' ? 'disabled' : ''} aria-label="增加库存">+</button>
+        </div></td>
         <td class="num"><strong class="${line.delta > 0 ? 'pos' : line.delta < 0 ? 'neg' : ''}">${line.available + Number(line.delta || 0)}</strong></td>
         <td><button class="secondary small-button remove-adjustment-line" data-index="${index}">移除</button></td>
       </tr>`).join('')}</tbody></table></div>` : '<div class="empty-state">尚未添加商品。</div>';
-    document.querySelectorAll('[data-delta]').forEach((input) => {
-      input.oninput = () => {
-        lines[Number(input.dataset.delta)].delta = Number(input.value);
-        const after = input.closest('tr').querySelector('td:nth-child(4) strong');
-        after.textContent = String(lines[Number(input.dataset.delta)].available + Number(input.value || 0));
-        after.className = Number(input.value) > 0 ? 'pos' : Number(input.value) < 0 ? 'neg' : '';
+    document.querySelectorAll('[data-sign]').forEach((button) => {
+      button.onclick = () => {
+        const line = lines[Number(button.dataset.index)];
+        line.delta = Number(button.dataset.sign) * Math.max(1, Math.abs(Number(line.delta) || 1));
+        renderLines();
       };
+    });
+    document.querySelectorAll('[data-magnitude]').forEach((input) => {
+      input.oninput = () => {
+        const line = lines[Number(input.dataset.magnitude)];
+        const sign = Number(line.delta) < 0 ? -1 : 1;
+        const magnitude = Math.max(0, Math.abs(Math.trunc(Number(input.value) || 0)));
+        line.delta = sign * magnitude;
+        const after = input.closest('tr').querySelector('td:nth-child(4) strong');
+        after.textContent = String(line.available + line.delta);
+        after.className = line.delta > 0 ? 'pos' : line.delta < 0 ? 'neg' : '';
+      };
+      input.onblur = () => { if (!Number(input.value) || Number(input.value) < 1) renderLines(); };
     });
     document.querySelectorAll('.remove-adjustment-line').forEach((button) => {
       button.onclick = () => { lines.splice(Number(button.dataset.index), 1); renderLines(); };
@@ -789,6 +941,33 @@ async function viewAdjustmentForm(id = null) {
   };
   $('#draft-item-find').onclick = findItems;
   $('#draft-item-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') findItems(); });
+  $('#draft-reason').onchange = () => {
+    lines.forEach(normalizeLineDirection);
+    renderLines();
+  };
+  $('#draft-attachments').onchange = (event) => {
+    const selected = [...event.target.files];
+    const tooLarge = selected.find((file) => file.size > 50 * 1024 * 1024);
+    if (tooLarge) alert(`${tooLarge.name} 超过 50 MB，未添加。`);
+    const room = 20 - Number(adjustment?.attachments?.length || 0) - pendingFiles.length;
+    pendingFiles.push(...selected.filter((file) => file.size > 0 && file.size <= 50 * 1024 * 1024).slice(0, Math.max(0, room)));
+    if (selected.length > room) alert('每张调整单最多保存 20 个附件。');
+    event.target.value = '';
+    renderPendingFiles();
+  };
+  if (id) {
+    await wireAttachmentActions(id, adjustment.attachments);
+    document.querySelectorAll('[data-attachment-delete]').forEach((button) => {
+      button.onclick = async () => {
+        if (!confirm('从这个 Draft 中移除该附件？')) return;
+        button.disabled = true;
+        try {
+          await api(`/adjustments/${id}/attachments/${button.dataset.attachmentDelete}`, { method: 'DELETE' });
+          await viewAdjustmentForm(id);
+        } catch (error) { alert(`移除失败：${error.message}`); button.disabled = false; }
+      };
+    });
+  }
   $('#draft-location').onchange = () => {
     if (!lines.length || confirm('更改仓位会清空当前调整明细，是否继续？')) {
       lines = [];
@@ -811,9 +990,20 @@ async function viewAdjustmentForm(id = null) {
         method: id ? 'PUT' : 'POST',
         body: JSON.stringify(body),
       });
+      const uploadErrors = [];
+      for (const file of pendingFiles) {
+        try { await apiUploadAttachment(result.id, file); }
+        catch (error) { uploadErrors.push(`${file.name}: ${error.message}`); }
+      }
+      if (uploadErrors.length) {
+        alert(`Draft 已保存，但以下附件上传失败：\n${uploadErrors.join('\n')}`);
+        await viewAdjustmentForm(result.id);
+        return;
+      }
       location.hash = `#/adjustments/${result.id}`;
     } catch (error) { alert(`保存失败：${error.message}`); event.target.disabled = false; }
   };
+  renderPendingFiles();
   renderLines();
 }
 
@@ -849,8 +1039,13 @@ async function viewAdjustment(id) {
         </tr>`).join('')}</tbody>
       </table></div>
       ${adjustment.notes ? `<div class="adjustment-notes"><strong>Notes</strong><p>${esc(adjustment.notes)}</p></div>` : ''}
+      <div class="adjustment-evidence">
+        <strong>Evidence attachments</strong>
+        ${attachmentListHtml(adjustment.attachments)}
+      </div>
     </div>
     ${canApply ? '<div class="notice"><strong>提交前确认：</strong>这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。</div>' : ''}`;
+  await wireAttachmentActions(id, adjustment.attachments);
   if ($('#apply-adjustment')) $('#apply-adjustment').onclick = async (event) => {
     const message = adjustment.status === 'applying'
       ? '将使用同一个幂等键安全重试，不会重复调整。是否继续？'
@@ -878,6 +1073,7 @@ async function viewAdjustment(id) {
 
 // ---- router ----
 async function route() {
+  clearMediaObjectUrls();
   const hash = location.hash || '#/dashboard';
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', hash.startsWith(`#/${a.dataset.nav}`)));
   try {

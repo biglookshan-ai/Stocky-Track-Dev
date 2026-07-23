@@ -4,7 +4,7 @@ const MAX_ABS_DELTA = 1_000_000;
 export function normalizeAdjustmentInput(input = {}) {
   const locationId = Number(input.locationId);
   const reasonId = Number(input.reasonId);
-  const notes = String(input.notes || '').trim().slice(0, 2000);
+  const notes = String(input.notes || '').trim().slice(0, 10000);
   if (!Number.isInteger(locationId) || locationId <= 0) throw new Error('请选择仓位');
   if (!Number.isInteger(reasonId) || reasonId <= 0) throw new Error('请选择 Adjustment reason');
   if (!Array.isArray(input.lines) || input.lines.length === 0) throw new Error('请至少添加一个商品');

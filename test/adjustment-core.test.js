@@ -6,6 +6,10 @@ import {
   normalizeAdjustmentInput,
   shopifyAdjustmentReason,
 } from '../src/adjustment-core.js';
+import {
+  MAX_ATTACHMENT_BYTES,
+  normalizeAttachmentMeta,
+} from '../src/adjustment-attachments.js';
 
 test('normalizes a valid multi-line adjustment draft', () => {
   assert.deepEqual(normalizeAdjustmentInput({
@@ -32,6 +36,32 @@ test('rejects zero, fractional and duplicate draft lines', () => {
     locationId: 1, reasonId: 1,
     lines: [{ itemId: 1, delta: 1 }, { itemId: 1, delta: 2 }],
   }), /商品重复/);
+});
+
+test('keeps detailed adjustment notes up to 10,000 characters', () => {
+  const notes = 'x'.repeat(12000);
+  const normalized = normalizeAdjustmentInput({
+    locationId: 1, reasonId: 1, notes, lines: [{ itemId: 1, delta: 1 }],
+  });
+  assert.equal(normalized.notes.length, 10000);
+});
+
+test('validates safe adjustment evidence attachments', () => {
+  assert.deepEqual(normalizeAttachmentMeta({
+    filename: 'damage evidence.mp4',
+    contentType: 'video/mp4',
+    size: 2048,
+  }), {
+    originalName: 'damage evidence.mp4',
+    contentType: 'video/mp4',
+    sizeBytes: 2048,
+  });
+  assert.throws(() => normalizeAttachmentMeta({
+    filename: 'invoice.html', contentType: 'text/html', size: 10,
+  }), /不支持/);
+  assert.throws(() => normalizeAttachmentMeta({
+    filename: 'large.mov', contentType: 'video/quicktime', size: MAX_ATTACHMENT_BYTES + 1,
+  }), /50 MB/);
 });
 
 test('maps business reasons to Shopify adjustment reasons', () => {

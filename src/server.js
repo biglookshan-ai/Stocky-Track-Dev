@@ -23,6 +23,11 @@ import {
   updateAdjustmentReason,
   updateStaff,
 } from './adjustments.js';
+import {
+  deleteAdjustmentAttachment,
+  getAdjustmentAttachment,
+  storeAdjustmentAttachment,
+} from './adjustment-attachments.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -401,6 +406,57 @@ api.post('/adjustments', async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+const attachmentBody = express.raw({ type: '*/*', limit: '50mb' });
+
+api.post('/adjustments/:id/attachments', attachmentBody, async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    let filename = '';
+    try { filename = decodeURIComponent(String(req.get('X-File-Name') || '')); }
+    catch { return res.status(400).json({ error: '附件文件名无效' }); }
+    const attachment = await storeAdjustmentAttachment({
+      adjustmentId: req.params.id,
+      staffId: req.ctx.staff.id,
+      filename,
+      contentType: req.get('Content-Type'),
+      buffer: req.body,
+    });
+    res.status(201).json({ attachment });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.get('/adjustments/:id/attachments/:attachmentId', async (req, res) => {
+  try {
+    const attachment = await getAdjustmentAttachment(req.params.id, req.params.attachmentId);
+    if (!attachment) return res.status(404).json({ error: '附件不存在' });
+    const inline = /^(image|video)\//.test(attachment.content_type)
+      || attachment.content_type === 'application/pdf';
+    const encodedName = encodeURIComponent(attachment.original_name);
+    res.set({
+      'Content-Type': attachment.content_type,
+      'Content-Length': String(attachment.size_bytes),
+      'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodedName}`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, no-store',
+    });
+    const stream = fs.createReadStream(attachment.fullPath);
+    stream.on('error', (error) => {
+      console.error('[attachments] read failed:', error.message);
+      if (!res.headersSent) res.status(404).json({ error: '附件文件不存在' });
+      else res.destroy(error);
+    });
+    stream.pipe(res);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.delete('/adjustments/:id/attachments/:attachmentId', async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    await deleteAdjustmentAttachment(req.params.id, req.params.attachmentId);
+    res.json({ deleted: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 api.get('/adjustments/:id', async (req, res) => {
   try {
     const adjustment = await getAdjustment(req.params.id);
@@ -767,6 +823,9 @@ api.get('/history/:id', async (req, res) => {
       q(`SELECT * FROM inventory_events WHERE id=$1`, [id]),
       q(`SELECT i.id AS item_id, i.product_title, i.variant_title,
                 i.barcode, i.sku, i.vendor, loc.name AS location,
+                sum(lg.delta) FILTER (WHERE lg.state='unavailable')::int AS direct_unavailable_delta,
+                (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
+                  FILTER (WHERE lg.state='unavailable'))[1]::int AS direct_unavailable_after,
                 sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
                 (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
                   FILTER (WHERE lg.state='available'))[1]::int AS available_after,
@@ -778,7 +837,10 @@ api.get('/history/:id', async (req, res) => {
                   FILTER (WHERE lg.state='committed'))[1]::int AS committed_after,
                 sum(lg.delta) FILTER (WHERE lg.state='incoming')::int AS incoming_delta,
                 (array_agg(lg.qty_after ORDER BY lg.occurred_at DESC, lg.id DESC)
-                  FILTER (WHERE lg.state='incoming'))[1]::int AS incoming_after
+                  FILTER (WHERE lg.state='incoming'))[1]::int AS incoming_after,
+                jsonb_agg(jsonb_build_object(
+                  'state', lg.state, 'delta', lg.delta, 'qty_after', lg.qty_after
+                ) ORDER BY lg.state, lg.occurred_at, lg.id) AS state_changes
          FROM inventory_ledger lg
          JOIN items i ON i.id=lg.item_id
          JOIN locations loc ON loc.id=lg.location_id
@@ -789,10 +851,14 @@ api.get('/history/:id', async (req, res) => {
     if (!event.rowCount) return res.status(404).json({ error: '修改记录不存在' });
     const rows = lines.rows.map((row) => ({
       ...row,
-      unavailable_delta: row.on_hand_delta === null && row.available_delta === null
-        ? null : Number(row.on_hand_delta || 0) - Number(row.available_delta || 0),
-      unavailable_after: row.on_hand_after === null || row.available_after === null
-        ? null : Number(row.on_hand_after) - Number(row.available_after),
+      unavailable_delta: row.direct_unavailable_delta !== null
+        ? row.direct_unavailable_delta
+        : row.on_hand_delta === null && row.available_delta === null
+          ? null : Number(row.on_hand_delta || 0) - Number(row.available_delta || 0),
+      unavailable_after: row.direct_unavailable_after !== null
+        ? row.direct_unavailable_after
+        : row.on_hand_after === null || row.available_after === null
+          ? null : Number(row.on_hand_after) - Number(row.available_after),
     }));
     res.json({
       event: event.rows[0],

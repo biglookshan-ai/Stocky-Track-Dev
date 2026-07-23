@@ -1,12 +1,12 @@
 # 进度 · Inventory
 
-- **状态**: 开发中 · P2 库存调整进入安全验收
-- **进度**: 86%
-- **一句话**: Stocky 风格库存调整已完成 Draft、Barcode 搜索、多商品明细、原因/员工、并发保护、幂等提交、归档与 CSV，等待受控 SKU 写入验收。
+- **状态**: 开发中 · P2 库存调整进入增强验收
+- **进度**: 89%
+- **一句话**: 库存调整已采用明确的加减方向和变化量，支持详细备注与图片/视频/文件证据；等待 Draft 附件和受控 SKU 写入验收。
 - **分类**: Shopify App
 
 ## 🔨 进行中
-- P2 受控验收：先检查 Draft 全流程，再选择测试 SKU 做 `+1 / -1` 回滚，核对 Shopify Adjustment history、修改记录和最终库存
+- P2 受控验收：先检查 Draft 的 `− / +`、多行备注和证据附件，再选择测试 SKU 做 `+1 / -1` 回滚，核对 Shopify Adjustment history、修改记录和最终库存
 - P1 持续验收：等待 180 天历史回填完成，抽查 Barcode、事件详情、Collection、前后台链接、订单/员工/App 归因和多状态数量
 
 ## ⏭ 下一步
@@ -15,6 +15,10 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 调整数量改为明确的 `− / +` 方向按钮和正整数数量，按 Before 自动计算 After；reason 可锁定允许方向
+- Notes 升级为 10,000 字多行说明；Draft 支持图片、视频、PDF 与常用文件附件，每个 50 MB、每单 20 个
+- 附件保存到 Railway `/data` Volume、元数据保存到 Postgres，仅认证员工可访问，危险脚本/可执行类型被拒绝
+- 修改记录详情将缺失状态显示为「未提供」而非 `—`，说明其不等于 0，并展示 Shopify 返回的其他库存状态
 - 新增「库存调整」工作区：列表筛选、状态、原因、员工、仓位、商品数、合计变化及详情
 - 新建/编辑 Draft 支持 Barcode、SKU、标题和 Brand 搜索，多商品增减及 Before / Change / After 预览
 - 提交 Shopify 前二次确认并重新读取当前 Available；使用 `changeFromQuantity` 阻止覆盖并发修改

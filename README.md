@@ -15,6 +15,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/snapshot.js` — 每日全量拉取 = 快照 + 漂移对账自愈
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
 - `src/adjustments.js` — 调整单 Draft / 提交 / 幂等重试 / 归档 / 原因与员工映射 / CSV
+- `src/adjustment-attachments.js` — 调整证据附件校验、Volume 文件存储与访问控制
 - `src/adjustment-core.js` — 调整输入校验、Shopify reason 映射和 mutation input 纯逻辑
 - `migrations/` — 全部表结构（含 M2/M3 的调整/盘点/虚拟库存/BOM，先建好）
 
@@ -26,9 +27,11 @@ Unavailable、Committed、Available、On hand、Incoming。全店每条修改事
 涉及商品、仓位和各库存状态变化，多商品事件也会列出完整明细。
 
 「库存调整」支持 Stocky 风格的多商品 Draft：按 Barcode / SKU / 标题搜索、选择仓位和
-Adjustment reason、记录员工和备注、预览 Before / Change / After，再经二次确认写入
-Shopify。提交使用持久幂等键和 `changeFromQuantity` 原值校验，网络结果未知时可安全重试，
-并支持状态筛选、归档及 CSV 导出。
+Adjustment reason、记录员工和详细备注，使用明确的 `− / +` 方向与数量预览
+Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图片、视频、PDF 和常用
+办公文件作为证据（文件存储在 `DATA_DIR` 对应 Volume，元数据存储在 Postgres）。提交使用
+持久幂等键和 `changeFromQuantity` 原值校验，网络结果未知时可安全重试，并支持状态筛选、
+归档及 CSV 导出。
 
 ## 部署（Railway）
 
@@ -45,6 +48,7 @@ Shopify。提交使用持久幂等键和 `changeFromQuantity` 原值校验，网
 16 秒（`SHOPIFYQL_PACE_MS` 可调），最近记录优先写入。进程部署或重启后会从数据库游标
 自动续跑；已写入本地的记录长期保留，因此随着应用运行可查询超过 180 天的历史。
 首次同步以前的 Stocky 历史不会自动出现，需要通过后续的 Stocky CSV 导入补齐。
+调整附件也依赖 `/data` Volume；没有持久 Volume 时，重新部署后附件文件会丢失。
 
 ## 本地开发
 
