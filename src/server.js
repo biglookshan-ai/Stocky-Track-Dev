@@ -317,8 +317,9 @@ api.post('/jobs/history', async (req, res) => {
 api.get('/item-options', async (req, res) => {
   try {
     const [vendors, collections] = await Promise.all([
-      q(`SELECT DISTINCT vendor FROM items
+      q(`SELECT vendor FROM items
          WHERE status <> 'deleted' AND vendor <> ''
+         GROUP BY vendor
          ORDER BY lower(vendor)`),
       listCollectionOptions({ shop: req.ctx.shop, token: req.ctx.token }),
     ]);
