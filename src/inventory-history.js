@@ -293,7 +293,9 @@ export async function runHistorySync(ctx, {
   const end = until ? new Date(until) : new Date();
   const defaultStart = new Date(+end - days * 86400000);
   // Two-minute overlap handles reporting lag and inclusive boundaries.
-  const cursorStart = incremental && state?.cursor
+  const resumeBackfill = !incremental && state?.mode === 'backfill'
+    && state?.cursor && +new Date(state.cursor) < +end;
+  const cursorStart = (incremental || resumeBackfill) && state?.cursor
     ? new Date(+new Date(state.cursor) - 120000)
     : defaultStart;
   const start = since ? new Date(since) : cursorStart;
@@ -301,6 +303,8 @@ export async function runHistorySync(ctx, {
     throw new Error('invalid inventory history date range');
   }
 
+  const mode = incremental ? 'incremental' : 'backfill';
+  const syncStart = resumeBackfill ? state.start : start.toISOString();
   let fetched = 0, inserted = 0, matched = 0, skipped = 0;
   const [itemRows, locationRows] = await Promise.all([
     q('SELECT id, shopify_inventory_item_gid FROM items WHERE shopify_inventory_item_gid IS NOT NULL'),
@@ -325,12 +329,12 @@ export async function runHistorySync(ctx, {
     await setState('inventory_history_sync', {
       cursor: new Date(windowEnd).toISOString(),
       fetched, inserted, matched, skipped,
-      running: windowEnd < +end,
+      running: windowEnd < +end, mode, start: syncStart,
     });
   }
   const summary = {
     cursor: end.toISOString(), fetched, inserted, matched, skipped,
-    finishedAt: new Date().toISOString(), running: false,
+    finishedAt: new Date().toISOString(), running: false, mode, start: syncStart,
   };
   await setState('inventory_history_sync', summary);
   return summary;

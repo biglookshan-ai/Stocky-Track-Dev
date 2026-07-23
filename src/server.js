@@ -120,7 +120,12 @@ api.post('/setup/webhooks', async (req, res) => {
     const results = await registerAll({ shop: req.ctx.shop, token: req.ctx.token }, appUrl);
     await setState('webhooks_registered', { at: new Date().toISOString(), results });
     res.json({ results });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    await setState('webhooks_registered', {
+      at: new Date().toISOString(), error: e.message,
+    }).catch(() => {});
+    res.status(500).json({ error: e.message });
+  }
 });
 
 api.get('/setup/webhooks', async (req, res) => {

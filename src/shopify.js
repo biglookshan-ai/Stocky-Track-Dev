@@ -16,7 +16,7 @@ export function offlineCtx(shopOverride = null) {
   return { shop, token };
 }
 
-export async function graphql(ctx, query, variables = {}, { retries = 4 } = {}) {
+export async function graphql(ctx, query, variables = {}, { retries = 8 } = {}) {
   for (let attempt = 0; ; attempt++) {
     const res = await fetch(`https://${ctx.shop}/admin/api/${VERSION}/graphql.json`, {
       method: 'POST',
@@ -36,9 +36,15 @@ export async function graphql(ctx, query, variables = {}, { retries = 4 } = {}) 
     if (!res.ok) throw new Error(`GraphQL HTTP ${res.status}: ${JSON.stringify(json)}`);
     const throttled = (json.errors || []).some((e) => e.extensions?.code === 'THROTTLED');
     if (throttled && attempt < retries) {
-      const cost = json.extensions?.cost;
-      const restore = cost ? (cost.requestedQueryCost - cost.throttleStatus.currentlyAvailable) / cost.throttleStatus.restoreRate : 2;
-      await sleep(Math.max(1000, Math.ceil(restore * 1000)));
+      const errorCost = (json.errors || []).find((e) => e.extensions?.cost)?.extensions?.cost;
+      const cost = json.extensions?.cost || errorCost;
+      const resetAt = cost?.windowResetAt ? +new Date(cost.windowResetAt) : NaN;
+      let wait = Number.isFinite(resetAt) ? resetAt - Date.now() + 1000 : 2000;
+      if (cost?.throttleStatus?.restoreRate) {
+        const deficit = Math.max(0, cost.requestedQueryCost - cost.throttleStatus.currentlyAvailable);
+        wait = Math.max(wait, Math.ceil(deficit / cost.throttleStatus.restoreRate * 1000));
+      }
+      await sleep(Math.min(60000, Math.max(1000, wait)));
       continue;
     }
     if (json.errors) throw new Error(`GraphQL errors: ${JSON.stringify(json.errors)}`);

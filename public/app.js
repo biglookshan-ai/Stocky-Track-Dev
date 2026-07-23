@@ -57,7 +57,13 @@ async function viewDashboard() {
       </div>
       <div class="row">
         <button id="btn-webhooks">② 注册 Webhooks</button>
-        <span class="muted">${s.webhooksRegistered ? `✅ 已注册（${fmtDate(s.webhooksRegistered.at)}）` : '未注册'}</span>
+        <span class="muted">${s.webhooksRegistered?.error
+          ? `❌ ${esc(s.webhooksRegistered.error)}`
+          : s.webhooksRegistered
+            ? s.webhooksRegistered.results?.some((r) => !r.ok)
+              ? `❌ 部分注册失败（${s.webhooksRegistered.results.filter((r) => !r.ok).map((r) => esc(r.topic)).join('、')}）`
+              : `✅ 已注册（${fmtDate(s.webhooksRegistered.at)}）`
+            : '未注册'}</span>
       </div>
       <div class="row">
         <button id="btn-snapshot" class="secondary">立即跑一次快照/对账</button>
