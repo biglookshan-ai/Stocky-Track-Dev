@@ -7,6 +7,8 @@ import { q, getState, setState } from './db.js';
 
 const MAX_ROWS = 1000;
 const MIN_SPLIT_MS = 1000;
+const SHOPIFYQL_PACE_MS = Number(process.env.SHOPIFYQL_PACE_MS || 16000);
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function isoSecond(value) {
   return new Date(value).toISOString().slice(0, 19);
@@ -134,8 +136,11 @@ async function queryWindow(ctx, start, end, depth = 0) {
         tableData { columns { name dataType displayName } rows }
         parseErrors
       }
-    }`, { query: buildHistoryQuery(start, end) });
+  }`, { query: buildHistoryQuery(start, end) });
   const rows = parseRows(data);
+  // A history query costs about 231 points against a 1,000-point minute
+  // window. Proactive pacing is more reliable than repeatedly hitting 429.
+  if (SHOPIFYQL_PACE_MS > 0) await delay(SHOPIFYQL_PACE_MS);
   if (rows.length < MAX_ROWS) return rows;
   const startMs = +new Date(start);
   const endMs = +new Date(end);
@@ -156,6 +161,7 @@ async function enrichGroups(ctx, rows) {
   const gids = [...new Set(rows.map((row) =>
     normalizeGid('InventoryAdjustmentGroup', row.inventory_adjustment_group_id)).filter(Boolean))];
   const changes = new Map();
+  const all = [];
   for (let offset = 0; offset < gids.length; offset += 50) {
     const ids = gids.slice(offset, offset + 50);
     try {
@@ -175,13 +181,15 @@ async function enrichGroups(ctx, rows) {
       for (const group of data.nodes || []) {
         if (!group) continue;
         for (const change of group.changes || []) {
+          const enrichedChange = { ...change, groupId: group.id, consumed: false };
           const key = [
             group.id, change.item?.id, change.location?.id,
             change.name, change.delta,
           ].map((x) => String(x ?? '')).join('|');
           const bucket = changes.get(key) || [];
-          bucket.push(change);
+          bucket.push(enrichedChange);
           changes.set(key, bucket);
+          all.push(enrichedChange);
         }
       }
     } catch (error) {
@@ -190,7 +198,7 @@ async function enrichGroups(ctx, rows) {
       console.warn('[history] group enrichment skipped:', error.message);
     }
   }
-  return changes;
+  return { byMatch: changes, all };
 }
 
 async function upsertEvent(row) {
@@ -239,7 +247,8 @@ async function ingestRow(row, enriched, lookup) {
   const enrichKey = [
     event.groupGid, itemGid, locationGid, state, delta,
   ].map((x) => String(x ?? '')).join('|');
-  const detail = enriched.get(enrichKey)?.shift() || null;
+  const detail = enriched.byMatch.get(enrichKey)?.shift() || null;
+  if (detail) detail.consumed = true;
   const changeId = externalChangeId(row);
   const actorName = row.staff_member_name || row.inventory_app_name || null;
 
@@ -284,6 +293,53 @@ async function ingestRow(row, enriched, lookup) {
       row.reference_document_uri || null, detail?.ledgerDocumentUri || null,
     ]);
   return { inserted: inserted.rowCount > 0 };
+}
+
+async function ingestEnrichedRemainders(rows, enriched, lookup) {
+  const rowByGroup = new Map(rows.map((row) => [
+    normalizeGid('InventoryAdjustmentGroup', row.inventory_adjustment_group_id),
+    row,
+  ]));
+  let inserted = 0, skipped = 0;
+  for (const change of enriched.all) {
+    if (change.consumed) continue;
+    const row = rowByGroup.get(change.groupId);
+    const itemId = lookup.items.get(change.item?.id);
+    const locationId = lookup.locations.get(change.location?.id);
+    if (!row || !itemId || !locationId) {
+      skipped++;
+      continue;
+    }
+    let event = lookup.events.get(change.groupId);
+    if (!event) {
+      event = await upsertEvent(row);
+      lookup.events.set(change.groupId, event);
+    }
+    const state = String(change.name || '').toLowerCase();
+    const delta = Number(change.delta || 0);
+    const changeId = [
+      'shopify-group', change.groupId, change.item.id,
+      change.location.id, state, delta,
+    ].join(':');
+    const result = await q(`
+      INSERT INTO inventory_ledger
+        (item_id, location_id, state, delta, qty_after, occurred_at, source_type,
+         source_ref, reason_code, attribution, attributed_at, event_id,
+         external_change_id, app_name, actor_name, reference_document_uri,
+         ledger_document_uri)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'shopifyql',now(),$10,$11,$12,$13,$14,$15)
+      ON CONFLICT (external_change_id) WHERE external_change_id IS NOT NULL DO NOTHING`,
+      [
+        itemId, locationId, state, delta, change.quantityAfterChange ?? null,
+        row.second, classifyHistorySource(row), row.reference_document_uri || null,
+        row.inventory_change_reason || null, event.id, changeId,
+        row.inventory_app_name || null,
+        row.staff_member_name || row.inventory_app_name || null,
+        row.reference_document_uri || null, change.ledgerDocumentUri || null,
+      ]);
+    if (result.rowCount) inserted++;
+  }
+  return { inserted, skipped };
 }
 
 export async function runHistorySync(ctx, {
@@ -332,6 +388,9 @@ export async function runHistorySync(ctx, {
       else if (result.matched) matched++;
       else skipped++;
     }
+    const extra = await ingestEnrichedRemainders(rows, enriched, lookup);
+    inserted += extra.inserted;
+    skipped += extra.skipped;
     await setState('inventory_history_sync', {
       cursor: new Date(cursor).toISOString(),
       fetched, inserted, matched, skipped,
