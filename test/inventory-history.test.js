@@ -5,6 +5,7 @@ import {
   classifyHistorySource,
   externalChangeId,
   groupAuditEvents,
+  historyWindowDays,
   normalizeGid,
 } from '../src/inventory-history.js';
 
@@ -19,6 +20,11 @@ test('buildHistoryQuery requests event-level adjustment dimensions', () => {
   assert.match(query, /inventory_adjustment_group_id/);
   assert.match(query, /staff_member_name/);
   assert.match(query, /LIMIT 250/);
+});
+
+test('history sync batches recent and backfill windows without losing adaptive splitting', () => {
+  assert.equal(historyWindowDays(true), 2);
+  assert.equal(historyWindowDays(false), 7);
 });
 
 test('normalizes Shopify numeric identities without touching GIDs', () => {

@@ -126,6 +126,7 @@ const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }
 const STATUS_HELP = {
   completion: '库存数量变化已经保存。系统正在补充操作原因、员工或 App，以及关联的 Order、Transfer 或调整编号；这不代表记录丢失。',
   discrepancy: '每日库存核对发现本应用推算值与 Shopify 当前值曾不一致。本应用只把本地记录校正到 Shopify 真值，不会修改 Shopify 库存；请确认差异合理后标记已确认。',
+  history: '历史同步先补最近记录，再按每批最多 7 天向前读取；数据超过 Shopify 单次上限时会自动拆分。进度会按批次跳动，并非逐行增加。',
 };
 const infoTip = (text) => `<span class="info-tip" tabindex="0" role="note" aria-label="${esc(text)}" data-tooltip="${esc(text)}">?</span>`;
 
@@ -312,7 +313,7 @@ async function viewDashboard() {
         <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；最近接收 ${fmtDate(s.webhookState?.last_inventory_at || s.webhookState?.last_received_at)}，处理 ${fmtDate(s.webhookState?.last_processed_at)}。</div></div>
         <div><strong>每日库存核对</strong><div class="muted">${snap ? `上次完成 ${fmtDate(snap.finishedAt || snap.snapDate)}，自动修正 ${snap.driftHealed} 处差异。` : '尚未完成首次核对。'}</div></div>
         <div><strong>历史记录</strong><div class="muted">${backfill?.running
-          ? `正在进行${backfillPct ? `（约 ${backfillPct}%）` : ''}，已读取 ${backfill.fetched || 0} 行；不影响当前页面使用。`
+          ? `正在进行${backfillPct ? `（约 ${backfillPct}%）` : ''}，已读取 ${backfill.fetched || 0} 行${backfill.cursor ? `，已回填到 ${fmtDate(backfill.cursor)}` : ''}；不影响当前页面使用。`
           : backfill?.error ? `同步已暂停：${esc(backfill.error)}`
           : backfill?.finishedAt ? `最近 180 天已同步完成（${fmtDate(backfill.finishedAt)}）。` : '尚未同步 Shopify 最近 180 天。'}</div></div>
       </div>
@@ -583,7 +584,7 @@ async function viewSystem() {
   const [status, alerts] = await Promise.all([api('/status'), api('/alerts')]);
   const pct = backfillPercent(status.historyBackfill);
   const historyState = status.historyBackfill?.running
-    ? { value: `${pct || '…'}%`, hint: `已读取 ${status.historyBackfill.fetched || 0} 行，仍在进行`, className: '' }
+    ? { value: `${pct || '…'}%`, hint: `已读取 ${status.historyBackfill.fetched || 0} 行${status.historyBackfill.cursor ? `，已回填到 ${fmtDate(status.historyBackfill.cursor)}` : ''}`, className: '' }
     : status.historyBackfill?.error
       ? { value: '已暂停', hint: status.historyBackfill.error, className: 'warn' }
       : status.historyBackfill?.finishedAt
@@ -599,7 +600,7 @@ async function viewSystem() {
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">库存信息补全 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">正在补充订单、员工、App 和关联编号</div></div>
       <div class="stat ${status.openAlerts ? 'warn' : 'ok'}"><div class="n">${status.openAlerts}</div><div class="l status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</div><div class="hint">本地已按 Shopify 真值校正，等待确认</div></div>
-      <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l">180 天历史同步</div><div class="hint">${esc(historyState.hint)}</div></div>
+      <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l status-label">180 天历史同步 ${infoTip(STATUS_HELP.history)}</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2 class="status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</h2><p class="muted compact">本地数量已经校正到 Shopify 实际值；请确认差异合理，然后标记为已确认。</p></div></div>

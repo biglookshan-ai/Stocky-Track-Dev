@@ -10,6 +10,10 @@ const MIN_SPLIT_MS = 1000;
 const SHOPIFYQL_PACE_MS = Number(process.env.SHOPIFYQL_PACE_MS || 16000);
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+export function historyWindowDays(incremental) {
+  return incremental ? 2 : 7;
+}
+
 function isoSecond(value) {
   return new Date(value).toISOString().slice(0, 19);
 }
@@ -406,13 +410,15 @@ export async function runHistorySync(ctx, {
   };
 
   if (incremental) {
-    for (let windowStart = +incrementalStart; windowStart < +end; windowStart += 86400000) {
-      const windowEnd = Math.min(windowStart + 86400000, +end);
+    const windowMs = historyWindowDays(true) * 86400000;
+    for (let windowStart = +incrementalStart; windowStart < +end; windowStart += windowMs) {
+      const windowEnd = Math.min(windowStart + windowMs, +end);
       await consumeWindow(windowStart, windowEnd, windowEnd < +end, windowEnd);
     }
   } else {
+    const windowMs = historyWindowDays(false) * 86400000;
     for (let windowEnd = +backfillEnd; windowEnd > +requestedStart;) {
-      const windowStart = Math.max(+requestedStart, windowEnd - 86400000);
+      const windowStart = Math.max(+requestedStart, windowEnd - windowMs);
       await consumeWindow(windowStart, windowEnd, windowStart > +requestedStart, windowStart);
       windowEnd = windowStart;
     }

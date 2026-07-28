@@ -161,9 +161,17 @@ function backfillNeedsResume(state) {
   return +new Date(state.cursor) > +new Date(state.start);
 }
 
+async function runPrioritizedHistoryBackfill(ctx) {
+  // A full backfill can hold the ShopifyQL lock for a while. Refresh the
+  // recent cursor first so delayed reporting rows and provisional webhook
+  // entries are enriched before older history continues.
+  await runHistorySync(ctx, { days: 2, incremental: true });
+  return runHistorySync(ctx, { days: 180, incremental: false });
+}
+
 function continueHistoryBackfill(ctx) {
   return withLock('shopify-heavy', 2 * 60 * 60 * 1000,
-    () => runHistorySync(ctx, { days: 180, incremental: false }))
+    () => runPrioritizedHistoryBackfill(ctx))
     .then(async (lockResult) => {
       if (!lockResult.skipped) return;
       const state = await getState('inventory_history_backfill');
@@ -1153,7 +1161,7 @@ async function resumeInterruptedHistory() {
   if (!state?.running) return;
   console.log(`[history] resuming backfill from ${state.cursor || 'latest cursor'}`);
   const lockResult = await withLock('shopify-heavy', 2 * 60 * 60 * 1000,
-    () => runHistorySync(offlineCtx(), { days: 180, incremental: false }));
+    () => runPrioritizedHistoryBackfill(offlineCtx()));
   if (lockResult.skipped) return;
   console.log('[history] resumed backfill finished');
 }
