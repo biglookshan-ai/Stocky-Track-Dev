@@ -257,30 +257,68 @@ async function ingestRow(row, enriched, lookup) {
   if (detail) detail.consumed = true;
   const changeId = externalChangeId(row);
   const actorName = row.staff_member_name || row.inventory_app_name || null;
+  const mergeParams = [
+    event.id, changeId, event.sourceType, row.reference_document_uri || null,
+    row.inventory_change_reason || null, row.inventory_app_name || null,
+    actorName, row.reference_document_uri || null, detail?.ledgerDocumentUri || null,
+    detail?.quantityAfterChange ?? null,
+    itemId, locationId, state, delta, row.second,
+  ];
 
   // Prefer enriching the webhook row that represents the same change rather
-  // than inserting a duplicate audit row.
+  // than inserting a duplicate audit row. A retry can encounter both an
+  // already-enriched canonical row and a later webhook placeholder. Merge that
+  // placeholder into the canonical row first so assigning the existing
+  // external_change_id never violates the unique index.
+  const canonical = await q(`
+    WITH updated AS (
+      UPDATE inventory_ledger SET
+        event_id=$1, source_type=$3, source_ref=$4,
+        reason_code=$5, app_name=$6, actor_name=$7, reference_document_uri=$8,
+        ledger_document_uri=$9, qty_after=COALESCE($10, qty_after),
+        attribution='shopifyql', attributed_at=now()
+      WHERE external_change_id=$2
+      RETURNING id
+    ),
+    removed_placeholder AS (
+      DELETE FROM inventory_ledger
+      WHERE id = (
+        SELECT id FROM inventory_ledger
+        WHERE item_id=$11 AND location_id=$12 AND state=$13 AND delta=$14
+          AND external_change_id IS NULL
+          AND source_type IN ('unknown','external_app')
+          AND occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
+                              AND $15::timestamptz + interval '10 minutes'
+        ORDER BY abs(extract(epoch FROM (occurred_at - $15::timestamptz))) ASC
+        LIMIT 1
+      )
+        AND EXISTS (SELECT 1 FROM updated)
+      RETURNING id
+    )
+    SELECT EXISTS (SELECT 1 FROM updated) AS found,
+           EXISTS (SELECT 1 FROM removed_placeholder) AS merged`,
+    mergeParams);
+  if (canonical.rows[0]?.found) {
+    return canonical.rows[0].merged ? { matched: true } : { skipped: true };
+  }
+
   const matched = await q(`
     UPDATE inventory_ledger SET
       event_id=$1, external_change_id=$2, source_type=$3, source_ref=$4,
       reason_code=$5, app_name=$6, actor_name=$7, reference_document_uri=$8,
-      ledger_document_uri=$9, attribution='shopifyql', attributed_at=now()
+      ledger_document_uri=$9, qty_after=COALESCE($10, qty_after),
+      attribution='shopifyql', attributed_at=now()
     WHERE id = (
       SELECT id FROM inventory_ledger
-      WHERE item_id=$10 AND location_id=$11 AND state=$12 AND delta=$13
+      WHERE item_id=$11 AND location_id=$12 AND state=$13 AND delta=$14
         AND external_change_id IS NULL
         AND source_type IN ('unknown','external_app')
-        AND occurred_at BETWEEN $14::timestamptz - interval '10 minutes'
-                            AND $14::timestamptz + interval '10 minutes'
-      ORDER BY abs(extract(epoch FROM (occurred_at - $14::timestamptz))) ASC
+        AND occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
+                            AND $15::timestamptz + interval '10 minutes'
+      ORDER BY abs(extract(epoch FROM (occurred_at - $15::timestamptz))) ASC
       LIMIT 1
     )`,
-    [
-      event.id, changeId, event.sourceType, row.reference_document_uri || null,
-      row.inventory_change_reason || null, row.inventory_app_name || null,
-      actorName, row.reference_document_uri || null, detail?.ledgerDocumentUri || null,
-      itemId, locationId, state, delta, row.second,
-    ]);
+    mergeParams);
   if (matched.rowCount) return { matched: true };
 
   const inserted = await q(`
@@ -407,6 +445,10 @@ export async function runHistorySync(ctx, {
       running, mode, direction, start: syncStart,
       heartbeat: new Date().toISOString(),
     });
+    console.log(
+      `[history] ${mode} ${new Date(windowStart).toISOString()}..${new Date(windowEnd).toISOString()}: `
+      + `${rows.length} rows; cursor ${new Date(cursor).toISOString()}`,
+    );
   };
 
   if (incremental) {
