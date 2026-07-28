@@ -1152,7 +1152,7 @@ function startScheduler() {
     .catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {
     withLock('shopify-heavy', 15 * 60 * 1000,
-      () => runHistorySync(offlineCtx(), { days: 2 }))
+      async () => runHistorySync(await offlineCtx(), { days: 2 }))
       .catch((e) => console.error('[sched] inventory history:', e.message));
   }, 5 * 60 * 1000);
   setInterval(async () => {
@@ -1163,7 +1163,8 @@ function startScheduler() {
       const today = now.toISOString().slice(0, 10);
       const last = await getState('last_snapshot');
       if (last && last.snapDate === today) return;
-      await withLock('shopify-heavy', 30 * 60 * 1000, () => runSnapshot(offlineCtx()));
+      await withLock('shopify-heavy', 30 * 60 * 1000,
+        async () => runSnapshot(await offlineCtx()));
     } catch (e) { console.error('[sched] snapshot:', e.message); }
   }, 60000);
 }
@@ -1174,7 +1175,7 @@ async function resumeInterruptedHistory() {
     if (!state?.running) return;
     console.log(`[history] resuming backfill from ${state.cursor || 'latest cursor'}`);
     const lockResult = await withLock('shopify-heavy', 2 * 60 * 60 * 1000,
-      () => runPrioritizedHistoryBackfill(offlineCtx()));
+      async () => runPrioritizedHistoryBackfill(await offlineCtx()));
     if (!lockResult.skipped) {
       console.log('[history] resumed backfill finished');
       return;

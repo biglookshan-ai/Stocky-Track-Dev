@@ -37,7 +37,7 @@ export function verifySessionToken(token) {
 
 // Get an offline access token for the shop (cached), via token exchange.
 export async function getAccessToken(shop, sessionToken, { force = false } = {}) {
-  const cached = getToken(shop);
+  const cached = await getToken(shop);
   if (cached && !force) return cached;
   const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
@@ -53,7 +53,7 @@ export async function getAccessToken(shop, sessionToken, { force = false } = {})
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok || !j.access_token) throw new Error(`token exchange failed (${res.status}): ${JSON.stringify(j)}`);
-  setToken(shop, j.access_token);
+  await setToken(shop, j.access_token);
   return j.access_token;
 }
 

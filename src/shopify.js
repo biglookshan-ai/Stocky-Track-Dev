@@ -8,10 +8,10 @@ const VERSION = process.env.SHOPIFY_API_VERSION || '2026-04';
 
 // Background jobs (webhook processing, snapshots) have no session token; they
 // use the offline token cached at install time. SHOP env pins the store.
-export function offlineCtx(shopOverride = null) {
+export async function offlineCtx(shopOverride = null) {
   const shop = shopOverride || process.env.SHOP;
   if (!shop) throw new Error('SHOP not set');
-  const token = getToken(shop);
+  const token = await getToken(shop);
   if (!token) throw new Error(`no offline token for ${shop} yet — open the app in Shopify admin once`);
   return { shop, token };
 }

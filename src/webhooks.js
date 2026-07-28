@@ -74,7 +74,7 @@ async function handle(topic, p, shopDomain, webhookId) {
       if (!item.rowCount) throw new Error(`unknown inventory_item ${p.inventory_item_id} (run catalog sync)`);
       if (!loc.rowCount) throw new Error(`unknown location ${p.location_id}`);
       if (typeof p.available !== 'number') return; // untracked item — nothing to record
-      const ctx = offlineCtx(shopDomain || null);
+      const ctx = await offlineCtx(shopDomain || null);
       const levelGid = `gid://shopify/InventoryLevel/${p.location_id}?inventory_item_id=${p.inventory_item_id}`;
       const data = await graphql(ctx, `
         query($id: ID!) {

@@ -16,6 +16,7 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 离线 Shopify token 改为使用 App Secret 加密后持久化到 Postgres；Railway 换容器后后台 Webhook、历史增量与每日核对可立即恢复
 - ShopifyQL 正式记录晚于 Webhook 到达时，会按同商品、仓位、库存状态、数量和 30 秒时间窗自动合并重复占位事件；日常同步持续回看最近 2 天，避免「库存信息补全中」长期保留
 - 修复历史补全重试时「已有正式记录 + 后到 Webhook 占位记录」触发唯一键冲突的问题，并覆盖 Shopify 额外库存状态的重复占位合并
 - 部署恢复历史回填前强制幂等重扫最近 2 天，确保旧游标之前遗留的「库存信息补全中」也会被再次处理
