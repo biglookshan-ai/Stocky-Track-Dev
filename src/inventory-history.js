@@ -234,35 +234,16 @@ async function upsertEvent(row) {
   return { id: r.rows[0].id, groupGid, sourceType };
 }
 
-async function ingestRow(row, enriched, lookup) {
-  const itemGid = normalizeGid('InventoryItem', row.inventory_item_id);
-  const locationGid = normalizeGid('Location', row.inventory_location_id);
-  const itemId = lookup.items.get(itemGid);
-  const locationId = lookup.locations.get(locationGid);
-  if (!itemId || !locationId) return { skipped: true };
-
-  const groupKey = normalizeGid('InventoryAdjustmentGroup', row.inventory_adjustment_group_id)
-    || externalChangeId(row);
-  let event = lookup.events.get(groupKey);
-  if (!event) {
-    event = await upsertEvent(row);
-    lookup.events.set(groupKey, event);
-  }
-  const state = String(row.inventory_state || 'available').toLowerCase();
-  const delta = Number(row.inventory_adjustment_change || 0);
-  const enrichKey = [
-    event.groupGid, itemGid, locationGid, state, delta,
-  ].map((x) => String(x ?? '')).join('|');
-  const detail = enriched.byMatch.get(enrichKey)?.shift() || null;
-  if (detail) detail.consumed = true;
-  const changeId = externalChangeId(row);
-  const actorName = row.staff_member_name || row.inventory_app_name || null;
+async function mergeLedgerChange({
+  event, changeId, itemId, locationId, state, delta, occurredAt,
+  qtyAfter = null, sourceType, sourceRef = null, reasonCode = null,
+  appName = null, actorName = null, referenceDocumentUri = null,
+  ledgerDocumentUri = null,
+}) {
   const mergeParams = [
-    event.id, changeId, event.sourceType, row.reference_document_uri || null,
-    row.inventory_change_reason || null, row.inventory_app_name || null,
-    actorName, row.reference_document_uri || null, detail?.ledgerDocumentUri || null,
-    detail?.quantityAfterChange ?? null,
-    itemId, locationId, state, delta, row.second,
+    event.id, changeId, sourceType, sourceRef, reasonCode, appName, actorName,
+    referenceDocumentUri, ledgerDocumentUri, qtyAfter,
+    itemId, locationId, state, delta, occurredAt,
   ];
 
   // Prefer enriching the webhook row that represents the same change rather
@@ -330,13 +311,51 @@ async function ingestRow(row, enriched, lookup) {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'shopifyql',now(),$10,$11,$12,$13,$14,$15)
     ON CONFLICT (external_change_id) WHERE external_change_id IS NOT NULL DO NOTHING`,
     [
-      itemId, locationId, state, delta,
-      detail?.quantityAfterChange ?? null, row.second, event.sourceType,
-      row.reference_document_uri || null, row.inventory_change_reason || null,
-      event.id, changeId, row.inventory_app_name || null, actorName,
-      row.reference_document_uri || null, detail?.ledgerDocumentUri || null,
+      itemId, locationId, state, delta, qtyAfter, occurredAt, sourceType,
+      sourceRef, reasonCode, event.id, changeId, appName, actorName,
+      referenceDocumentUri, ledgerDocumentUri,
     ]);
   return { inserted: inserted.rowCount > 0 };
+}
+
+async function ingestRow(row, enriched, lookup) {
+  const itemGid = normalizeGid('InventoryItem', row.inventory_item_id);
+  const locationGid = normalizeGid('Location', row.inventory_location_id);
+  const itemId = lookup.items.get(itemGid);
+  const locationId = lookup.locations.get(locationGid);
+  if (!itemId || !locationId) return { skipped: true };
+
+  const groupKey = normalizeGid('InventoryAdjustmentGroup', row.inventory_adjustment_group_id)
+    || externalChangeId(row);
+  let event = lookup.events.get(groupKey);
+  if (!event) {
+    event = await upsertEvent(row);
+    lookup.events.set(groupKey, event);
+  }
+  const state = String(row.inventory_state || 'available').toLowerCase();
+  const delta = Number(row.inventory_adjustment_change || 0);
+  const enrichKey = [
+    event.groupGid, itemGid, locationGid, state, delta,
+  ].map((x) => String(x ?? '')).join('|');
+  const detail = enriched.byMatch.get(enrichKey)?.shift() || null;
+  if (detail) detail.consumed = true;
+  return mergeLedgerChange({
+    event,
+    changeId: externalChangeId(row),
+    itemId,
+    locationId,
+    state,
+    delta,
+    occurredAt: row.second,
+    qtyAfter: detail?.quantityAfterChange ?? null,
+    sourceType: event.sourceType,
+    sourceRef: row.reference_document_uri || null,
+    reasonCode: row.inventory_change_reason || null,
+    appName: row.inventory_app_name || null,
+    actorName: row.staff_member_name || row.inventory_app_name || null,
+    referenceDocumentUri: row.reference_document_uri || null,
+    ledgerDocumentUri: detail?.ledgerDocumentUri || null,
+  });
 }
 
 async function ingestEnrichedRemainders(rows, enriched, lookup) {
@@ -344,7 +363,7 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
     normalizeGid('InventoryAdjustmentGroup', row.inventory_adjustment_group_id),
     row,
   ]));
-  let inserted = 0, skipped = 0;
+  let inserted = 0, matched = 0, skipped = 0;
   for (const change of enriched.all) {
     if (change.consumed) continue;
     const row = rowByGroup.get(change.groupId);
@@ -365,25 +384,28 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
       'shopify-group', change.groupId, change.item.id,
       change.location.id, state, delta,
     ].join(':');
-    const result = await q(`
-      INSERT INTO inventory_ledger
-        (item_id, location_id, state, delta, qty_after, occurred_at, source_type,
-         source_ref, reason_code, attribution, attributed_at, event_id,
-         external_change_id, app_name, actor_name, reference_document_uri,
-         ledger_document_uri)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'shopifyql',now(),$10,$11,$12,$13,$14,$15)
-      ON CONFLICT (external_change_id) WHERE external_change_id IS NOT NULL DO NOTHING`,
-      [
-        itemId, locationId, state, delta, change.quantityAfterChange ?? null,
-        row.second, classifyHistorySource(row), row.reference_document_uri || null,
-        row.inventory_change_reason || null, event.id, changeId,
-        row.inventory_app_name || null,
-        row.staff_member_name || row.inventory_app_name || null,
-        row.reference_document_uri || null, change.ledgerDocumentUri || null,
-      ]);
-    if (result.rowCount) inserted++;
+    const result = await mergeLedgerChange({
+      event,
+      changeId,
+      itemId,
+      locationId,
+      state,
+      delta,
+      occurredAt: row.second,
+      qtyAfter: change.quantityAfterChange ?? null,
+      sourceType: classifyHistorySource(row),
+      sourceRef: row.reference_document_uri || null,
+      reasonCode: row.inventory_change_reason || null,
+      appName: row.inventory_app_name || null,
+      actorName: row.staff_member_name || row.inventory_app_name || null,
+      referenceDocumentUri: row.reference_document_uri || null,
+      ledgerDocumentUri: change.ledgerDocumentUri || null,
+    });
+    if (result.inserted) inserted++;
+    else if (result.matched) matched++;
+    else skipped++;
   }
-  return { inserted, skipped };
+  return { inserted, matched, skipped };
 }
 
 export async function runHistorySync(ctx, {
@@ -438,6 +460,7 @@ export async function runHistorySync(ctx, {
     }
     const extra = await ingestEnrichedRemainders(rows, enriched, lookup);
     inserted += extra.inserted;
+    matched += extra.matched;
     skipped += extra.skipped;
     await setState(stateKey, {
       cursor: new Date(cursor).toISOString(),
