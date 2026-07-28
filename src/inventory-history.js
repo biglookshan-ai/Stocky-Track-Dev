@@ -3,7 +3,7 @@
 // reference document. Windows overlap deliberately; external_change_id makes
 // ingestion idempotent.
 import { graphql } from './shopify.js';
-import { q, getState, setState } from './db.js';
+import { pool, q, getState, setState } from './db.js';
 
 const MAX_ROWS = 1000;
 const MIN_SPLIT_MS = 1000;
@@ -416,6 +416,87 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
   return { inserted, matched, skipped };
 }
 
+// ShopifyQL reporting can arrive after the realtime webhook placeholder has
+// already been saved. If a later canonical event contains every quantity
+// change from that placeholder at the same item/location within 30 seconds,
+// the two rows describe the same Shopify operation. Remove only the provisional
+// duplicate; the enriched ShopifyQL event remains the audit source.
+export async function mergeNearbyProvisionalEvents() {
+  const candidates = await q(`
+    SELECT pe.id AS provisional_event_id, ce.id AS canonical_event_id
+    FROM inventory_events pe
+    JOIN inventory_events ce
+      ON ce.id <> pe.id
+     AND ce.source_type <> 'unknown'
+     AND ce.occurred_at BETWEEN pe.occurred_at - interval '30 seconds'
+                            AND pe.occurred_at + interval '30 seconds'
+    WHERE pe.source_type = 'unknown'
+      AND pe.shopify_group_gid LIKE 'webhook:%'
+      AND EXISTS (
+        SELECT 1 FROM inventory_ledger p
+        WHERE p.event_id=pe.id AND p.attribution='pending'
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM inventory_ledger p
+        WHERE p.event_id=pe.id AND p.attribution <> 'pending'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM inventory_ledger p
+        WHERE p.event_id=pe.id
+          AND NOT EXISTS (
+            SELECT 1
+            FROM inventory_ledger c
+            WHERE c.event_id=ce.id
+              AND c.item_id=p.item_id
+              AND c.location_id=p.location_id
+              AND c.state=p.state
+              AND c.delta=p.delta
+              AND (p.qty_after IS NULL OR c.qty_after IS NULL OR c.qty_after=p.qty_after)
+          )
+      )
+    ORDER BY pe.id,
+             abs(extract(epoch FROM (ce.occurred_at - pe.occurred_at))) ASC`);
+  if (!candidates.rowCount) return 0;
+
+  const winners = new Map();
+  for (const row of candidates.rows) {
+    if (!winners.has(row.provisional_event_id)) {
+      winners.set(row.provisional_event_id, row.canonical_event_id);
+    }
+  }
+
+  const client = await pool.connect();
+  let merged = 0;
+  try {
+    await client.query('BEGIN');
+    for (const provisionalEventId of winners.keys()) {
+      const removed = await client.query(
+        `DELETE FROM inventory_ledger
+         WHERE event_id=$1 AND attribution='pending'`,
+        [provisionalEventId],
+      );
+      if (!removed.rowCount) continue;
+      const event = await client.query(
+        `DELETE FROM inventory_events
+         WHERE id=$1
+           AND NOT EXISTS (
+             SELECT 1 FROM inventory_ledger WHERE event_id=$1
+           )`,
+        [provisionalEventId],
+      );
+      if (event.rowCount) merged++;
+    }
+    await client.query('COMMIT');
+    return merged;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function runHistorySync(ctx, {
   since = null, until = null, days = 2, incremental = true,
 } = {}) {
@@ -498,6 +579,7 @@ export async function runHistorySync(ctx, {
       windowEnd = windowStart;
     }
   }
+  const provisionalMerged = await mergeNearbyProvisionalEvents();
   // Once provisional webhook ledger rows have been attached to the enriched
   // ShopifyQL event, remove the now-empty placeholder. This keeps the visible
   // history at one business event per operation without losing immediacy.
@@ -510,6 +592,7 @@ export async function runHistorySync(ctx, {
   const summary = {
     cursor: incremental ? end.toISOString() : requestedStart.toISOString(),
     fetched, inserted, matched, skipped,
+    provisionalMerged,
     finishedAt: new Date().toISOString(), running: false,
     mode, direction, start: syncStart,
   };
