@@ -14,6 +14,13 @@ export function historyWindowDays(incremental) {
   return incremental ? 2 : 7;
 }
 
+export function incrementalHistoryStart({ since, state, requestedStart }) {
+  if (!since && state?.mode === 'incremental' && state?.cursor) {
+    return new Date(+new Date(state.cursor) - 120000);
+  }
+  return requestedStart;
+}
+
 function isoSecond(value) {
   return new Date(value).toISOString().slice(0, 19);
 }
@@ -424,8 +431,8 @@ export async function runHistorySync(ctx, {
   const direction = incremental ? 'forward' : 'backward';
   // Incremental runs overlap two minutes. Backfills run newest-first so the
   // product screen becomes useful immediately, then continue towards day 180.
-  const incrementalStart = incremental && state?.mode === 'incremental' && state?.cursor
-    ? new Date(+new Date(state.cursor) - 120000)
+  const incrementalStart = incremental
+    ? incrementalHistoryStart({ since, state, requestedStart })
     : requestedStart;
   const resumeBackfill = !incremental && state?.mode === 'backfill'
     && state?.direction === 'backward' && state?.cursor

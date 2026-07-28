@@ -5,6 +5,7 @@ import {
   classifyHistorySource,
   externalChangeId,
   groupAuditEvents,
+  incrementalHistoryStart,
   historyWindowDays,
   normalizeGid,
 } from '../src/inventory-history.js';
@@ -25,6 +26,19 @@ test('buildHistoryQuery requests event-level adjustment dimensions', () => {
 test('history sync batches recent and backfill windows without losing adaptive splitting', () => {
   assert.equal(historyWindowDays(true), 2);
   assert.equal(historyWindowDays(false), 7);
+});
+
+test('explicit recent replay ignores the saved incremental cursor', () => {
+  const requestedStart = new Date('2026-07-26T12:00:00Z');
+  const state = { mode: 'incremental', cursor: '2026-07-28T12:00:00Z' };
+  assert.equal(
+    incrementalHistoryStart({ since: requestedStart.toISOString(), state, requestedStart }),
+    requestedStart,
+  );
+  assert.equal(
+    incrementalHistoryStart({ since: null, state, requestedStart }).toISOString(),
+    '2026-07-28T11:58:00.000Z',
+  );
 });
 
 test('normalizes Shopify numeric identities without touching GIDs', () => {

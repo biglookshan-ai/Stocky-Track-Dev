@@ -165,7 +165,10 @@ async function runPrioritizedHistoryBackfill(ctx) {
   // A full backfill can hold the ShopifyQL lock for a while. Refresh the
   // recent cursor first so delayed reporting rows and provisional webhook
   // entries are enriched before older history continues.
-  await runHistorySync(ctx, { days: 2, incremental: true });
+  await runHistorySync(ctx, {
+    since: new Date(Date.now() - 2 * 86400000).toISOString(),
+    incremental: true,
+  });
   return runHistorySync(ctx, { days: 180, incremental: false });
 }
 
