@@ -1160,13 +1160,22 @@ function startScheduler() {
 }
 
 async function resumeInterruptedHistory() {
-  const state = await getState('inventory_history_backfill');
-  if (!state?.running) return;
-  console.log(`[history] resuming backfill from ${state.cursor || 'latest cursor'}`);
-  const lockResult = await withLock('shopify-heavy', 2 * 60 * 60 * 1000,
-    () => runPrioritizedHistoryBackfill(offlineCtx()));
-  if (lockResult.skipped) return;
-  console.log('[history] resumed backfill finished');
+  for (;;) {
+    const state = await getState('inventory_history_backfill');
+    if (!state?.running) return;
+    console.log(`[history] resuming backfill from ${state.cursor || 'latest cursor'}`);
+    const lockResult = await withLock('shopify-heavy', 2 * 60 * 60 * 1000,
+      () => runPrioritizedHistoryBackfill(offlineCtx()));
+    if (!lockResult.skipped) {
+      console.log('[history] resumed backfill finished');
+      return;
+    }
+    // Railway briefly overlaps the old and new container during deployment.
+    // The old process can still own the advisory lock for a few seconds; keep
+    // retrying instead of leaving the persisted state stuck at running=true.
+    console.log('[history] resume lock busy; retrying in 15 seconds');
+    await new Promise((resolve) => setTimeout(resolve, 15000));
+  }
 }
 
 const PORT = process.env.PORT || 3000;
