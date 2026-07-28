@@ -131,7 +131,8 @@ async function handle(topic, p, shopDomain, webhookId) {
     case 'fulfillments/create':
     case 'fulfillments/update':
     case 'refunds/create':
-    case 'inventory_transfers/updated':
+    case 'inventory_transfers/add_items':
+    case 'inventory_transfers/remove_items':
     case 'inventory_transfers/cancel':
     case 'inventory_transfers/complete':
     case 'inventory_transfers/ready_to_ship':
@@ -147,18 +148,30 @@ async function handle(topic, p, shopDomain, webhookId) {
 }
 
 // Register all needed subscriptions (idempotent: Shopify de-dupes by topic+url).
-const TOPICS = [
-  'INVENTORY_LEVELS_UPDATE', 'INVENTORY_ITEMS_UPDATE',
-  'PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE',
-  'LOCATIONS_CREATE', 'LOCATIONS_UPDATE',
-  'ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED',
-  'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'REFUNDS_CREATE',
-  'INVENTORY_TRANSFERS_UPDATED', 'INVENTORY_TRANSFERS_CANCEL',
-  'INVENTORY_TRANSFERS_COMPLETE', 'INVENTORY_TRANSFERS_READY_TO_SHIP',
-  'INVENTORY_TRANSFERS_UPDATE_ITEM_QUANTITIES',
-  'INVENTORY_SHIPMENTS_CREATE', 'INVENTORY_SHIPMENTS_MARK_IN_TRANSIT',
-  'INVENTORY_SHIPMENTS_RECEIVE_ITEMS',
-  'INVENTORY_SHIPMENTS_UPDATE_ITEM_QUANTITIES',
+export const WEBHOOK_TOPICS = [
+  { topic: 'INVENTORY_LEVELS_UPDATE', optional: false },
+  { topic: 'INVENTORY_ITEMS_UPDATE', optional: false },
+  { topic: 'PRODUCTS_CREATE', optional: false },
+  { topic: 'PRODUCTS_UPDATE', optional: false },
+  { topic: 'PRODUCTS_DELETE', optional: false },
+  { topic: 'LOCATIONS_CREATE', optional: false },
+  { topic: 'LOCATIONS_UPDATE', optional: false },
+  { topic: 'ORDERS_CREATE', optional: true },
+  { topic: 'ORDERS_UPDATED', optional: true },
+  { topic: 'ORDERS_CANCELLED', optional: true },
+  { topic: 'FULFILLMENTS_CREATE', optional: true },
+  { topic: 'FULFILLMENTS_UPDATE', optional: true },
+  { topic: 'REFUNDS_CREATE', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_ADD_ITEMS', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_REMOVE_ITEMS', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_CANCEL', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_COMPLETE', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_READY_TO_SHIP', optional: true },
+  { topic: 'INVENTORY_TRANSFERS_UPDATE_ITEM_QUANTITIES', optional: true },
+  { topic: 'INVENTORY_SHIPMENTS_CREATE', optional: true },
+  { topic: 'INVENTORY_SHIPMENTS_MARK_IN_TRANSIT', optional: true },
+  { topic: 'INVENTORY_SHIPMENTS_RECEIVE_ITEMS', optional: true },
+  { topic: 'INVENTORY_SHIPMENTS_UPDATE_ITEM_QUANTITIES', optional: true },
 ];
 
 export function normalizeAppUrl(value) {
@@ -167,21 +180,32 @@ export function normalizeAppUrl(value) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-export async function registerAll(ctx, appUrl) {
+export async function registerAll(ctx, appUrl, request = graphql) {
   const url = `${normalizeAppUrl(appUrl)}/webhooks`;
   const results = [];
-  for (const topic of TOPICS) {
-    const data = await graphql(ctx, `
-      mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
-        webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
-          webhookSubscription { id }
-          userErrors { field message }
-        }
-      }`, { topic, sub: { callbackUrl: url, format: 'JSON' } });
-    const errs = data.webhookSubscriptionCreate.userErrors;
-    // "already taken" errors mean the subscription exists — fine.
-    const ok = !errs.length || errs.every((e) => /taken|exists/i.test(e.message));
-    results.push({ topic, ok, errors: ok ? [] : errs });
+  for (const { topic, optional } of WEBHOOK_TOPICS) {
+    try {
+      const data = await request(ctx, `
+        mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
+          webhookSubscriptionCreate(topic: $topic, webhookSubscription: $sub) {
+            webhookSubscription { id }
+            userErrors { field message }
+          }
+        }`, { topic, sub: { callbackUrl: url, format: 'JSON' } });
+      const errs = data.webhookSubscriptionCreate.userErrors;
+      // "already taken" errors mean the subscription exists — fine.
+      const ok = !errs.length || errs.every((e) => /taken|exists/i.test(e.message));
+      results.push({ topic, optional, ok, errors: ok ? [] : errs });
+    } catch (error) {
+      // A version- or scope-specific enrichment topic must never prevent the
+      // core inventory subscriptions later in the list from being attempted.
+      results.push({
+        topic,
+        optional,
+        ok: false,
+        errors: [{ message: String(error.message || error).slice(0, 500) }],
+      });
+    }
   }
   return results;
 }

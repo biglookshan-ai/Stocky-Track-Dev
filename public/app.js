@@ -337,7 +337,9 @@ async function viewDashboard() {
           ? `❌ ${esc(s.webhooksRegistered.error)}`
           : s.webhooksRegistered
             ? s.webhooksRegistered.results?.some((r) => !r.ok)
-              ? `❌ 部分注册失败（${s.webhooksRegistered.results.filter((r) => !r.ok).map((r) => esc(r.topic)).join('、')}）`
+              ? s.webhooksRegistered.results.some((r) => !r.ok && !r.optional)
+                ? `❌ 核心实时接收注册失败（${s.webhooksRegistered.results.filter((r) => !r.ok && !r.optional).map((r) => esc(r.topic)).join('、')}）`
+                : `⚠️ 核心已注册；${s.webhooksRegistered.results.filter((r) => !r.ok).length} 个扩展事件因权限或版本未注册`
               : `✅ 已注册（${fmtDate(s.webhooksRegistered.at)}）`
             : '未注册'}</span>
       </div>
@@ -388,7 +390,12 @@ async function viewDashboard() {
   $('#btn-webhooks').onclick = guard(async () => {
     const { results } = await api('/setup/webhooks', { method: 'POST' });
     const failed = results.filter((r) => !r.ok);
-    if (failed.length) alert(`部分 topic 注册失败：\n${failed.map((f) => `${f.topic}: ${JSON.stringify(f.errors)}`).join('\n')}`);
+    const coreFailed = failed.filter((r) => !r.optional);
+    if (coreFailed.length) {
+      alert(`核心实时接收注册失败：\n${coreFailed.map((f) => f.topic).join('\n')}`);
+    } else if (failed.length) {
+      alert(`核心库存实时接收已注册。\n另有 ${failed.length} 个订单、调拨或运输扩展事件因当前权限或 API 版本未注册，不影响库存数量的实时记录。`);
+    }
     viewDashboard();
   });
   $('#btn-snapshot').onclick = guard(async (e) => {

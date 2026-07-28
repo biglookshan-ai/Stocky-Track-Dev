@@ -16,6 +16,8 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 修复 Shopify 2026-04 不支持 `INVENTORY_TRANSFERS_UPDATED` 导致整批 Webhook 注册中断的问题，改用受支持的 Add/Remove items 事件
+- Webhook 改为逐项注册和核心/扩展分级；单个调拨、运输事件缺少权限或版本不支持时，不再阻断库存核心实时接收
 - webhook 库存变化先即时生成 Pending attribution 可见记录，ShopifyQL 后续原位补齐来源，避免最新记录长期停在旧日期
 - 新调整单采用 `ADJ-YYYYMM-xxxxx` 稳定编号，区分 Shopify 登录账号、实际记录员工和多位经手员工
 - 员工资料支持员工编号与不绑定 Shopify 账号的本地员工，人员可在调整详情和 CSV 中长期保留
