@@ -5,7 +5,7 @@
 // everything else in the background.
 import crypto from 'node:crypto';
 import { q } from './db.js';
-import { recordLevelUpdate, upsertCurrentLevel } from './ledger.js';
+import { recordQuantityUpdate } from './ledger.js';
 import { INVENTORY_STATES, upsertProductFromWebhook } from './catalog.js';
 import { graphql, offlineCtx } from './shopify.js';
 
@@ -44,12 +44,12 @@ export async function receive(req, res) {
 // Process unhandled events oldest-first. Called by the scheduler.
 export async function processPending(limit = 200) {
   const rows = await q(
-    `SELECT id, topic, shop_domain, payload FROM webhook_events
+    `SELECT id, webhook_id, topic, shop_domain, payload FROM webhook_events
      WHERE processed_at IS NULL ORDER BY id ASC LIMIT $1`, [limit]);
   let done = 0;
   for (const ev of rows.rows) {
     try {
-      await handle(ev.topic, ev.payload, ev.shop_domain);
+      await handle(ev.topic, ev.payload, ev.shop_domain, ev.webhook_id);
       await q('UPDATE webhook_events SET processed_at = now(), error = NULL WHERE id = $1', [ev.id]);
       done++;
     } catch (e) {
@@ -62,7 +62,7 @@ export async function processPending(limit = 200) {
   return done;
 }
 
-async function handle(topic, p, shopDomain) {
+async function handle(topic, p, shopDomain, webhookId) {
   switch (topic) {
     case 'inventory_levels/update': {
       const item = await q(
@@ -90,13 +90,14 @@ async function handle(topic, p, shopDomain) {
       for (const state of INVENTORY_STATES) {
         if (!(state in quantities)) quantities[state] = null;
       }
-      await recordLevelUpdate({
+      await recordQuantityUpdate({
         itemId: item.rows[0].id,
         locationId: loc.rows[0].id,
-        available: quantities.available ?? p.available,
+        quantities,
         occurredAt: p.updated_at || new Date().toISOString(),
+        webhookId,
+        topic,
       });
-      await upsertCurrentLevel(item.rows[0].id, loc.rows[0].id, quantities);
       return;
     }
     case 'products/update':
@@ -121,10 +122,24 @@ async function handle(topic, p, shopDomain) {
                ON CONFLICT (shopify_gid) DO UPDATE SET name=$2, active=$3`,
         [`gid://shopify/Location/${p.id}`, p.name || '', p.active !== false]);
       return;
-    // orders/create & refunds/create stay in webhook_events as raw material
-    // for the attribution pass — no direct handling needed.
+    // Order, fulfillment, refund and transfer lifecycle events stay in the raw
+    // archive for attribution/reference enrichment. No inventory write is
+    // performed from these payloads.
     case 'orders/create':
+    case 'orders/updated':
+    case 'orders/cancelled':
+    case 'fulfillments/create':
+    case 'fulfillments/update':
     case 'refunds/create':
+    case 'inventory_transfers/updated':
+    case 'inventory_transfers/cancel':
+    case 'inventory_transfers/complete':
+    case 'inventory_transfers/ready_to_ship':
+    case 'inventory_transfers/update_item_quantities':
+    case 'inventory_shipments/create':
+    case 'inventory_shipments/mark_in_transit':
+    case 'inventory_shipments/receive_items':
+    case 'inventory_shipments/update_item_quantities':
       return;
     default:
       return; // unknown topic: archive only
@@ -136,7 +151,14 @@ const TOPICS = [
   'INVENTORY_LEVELS_UPDATE', 'INVENTORY_ITEMS_UPDATE',
   'PRODUCTS_CREATE', 'PRODUCTS_UPDATE', 'PRODUCTS_DELETE',
   'LOCATIONS_CREATE', 'LOCATIONS_UPDATE',
-  'ORDERS_CREATE', 'REFUNDS_CREATE',
+  'ORDERS_CREATE', 'ORDERS_UPDATED', 'ORDERS_CANCELLED',
+  'FULFILLMENTS_CREATE', 'FULFILLMENTS_UPDATE', 'REFUNDS_CREATE',
+  'INVENTORY_TRANSFERS_UPDATED', 'INVENTORY_TRANSFERS_CANCEL',
+  'INVENTORY_TRANSFERS_COMPLETE', 'INVENTORY_TRANSFERS_READY_TO_SHIP',
+  'INVENTORY_TRANSFERS_UPDATE_ITEM_QUANTITIES',
+  'INVENTORY_SHIPMENTS_CREATE', 'INVENTORY_SHIPMENTS_MARK_IN_TRANSIT',
+  'INVENTORY_SHIPMENTS_RECEIVE_ITEMS',
+  'INVENTORY_SHIPMENTS_UPDATE_ITEM_QUANTITIES',
 ];
 
 export function normalizeAppUrl(value) {

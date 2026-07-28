@@ -1,5 +1,15 @@
 const MAX_LINES = 250;
 const MAX_ABS_DELTA = 1_000_000;
+const MAX_PARTICIPANTS = 20;
+
+function normalizeParticipant(value, label) {
+  if (!value) return null;
+  const staffId = Number(value.staffId);
+  const normalizedStaffId = Number.isInteger(staffId) && staffId > 0 ? staffId : null;
+  const name = String(value.name || '').trim().slice(0, 120);
+  if (!normalizedStaffId && !name) throw new Error(`${label}无效`);
+  return { staffId: normalizedStaffId, name };
+}
 
 export function normalizeAdjustmentInput(input = {}) {
   const locationId = Number(input.locationId);
@@ -21,7 +31,33 @@ export function normalizeAdjustmentInput(input = {}) {
     seen.add(itemId);
     return { itemId, delta };
   });
-  return { locationId, reasonId, notes, lines };
+  const recordedBy = normalizeParticipant(input.recordedBy, '记录员工');
+  const handledInput = Array.isArray(input.handledBy) ? input.handledBy : [];
+  if (handledInput.length > MAX_PARTICIPANTS) {
+    throw new Error(`每张调整单最多 ${MAX_PARTICIPANTS} 位经手员工`);
+  }
+  const seenParticipants = new Set();
+  const handledBy = handledInput.map((person, index) => {
+    const normalized = normalizeParticipant(person, `第 ${index + 1} 位经手员工`);
+    const key = normalized.staffId
+      ? `staff:${normalized.staffId}`
+      : `name:${normalized.name.toLocaleLowerCase()}`;
+    if (seenParticipants.has(key)) throw new Error('经手员工重复');
+    seenParticipants.add(key);
+    return normalized;
+  });
+  return { locationId, reasonId, notes, lines, recordedBy, handledBy };
+}
+
+export function newAdjustmentDisplayNumber(number, createdAt = new Date()) {
+  const value = Number(number);
+  const date = new Date(createdAt);
+  if (!Number.isInteger(value) || value <= 0 || !Number.isFinite(+date)) {
+    throw new Error('调整编号无效');
+  }
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  return `ADJ-${year}${month}-${String(value).padStart(5, '0')}`;
 }
 
 export function shopifyAdjustmentReason(name = '') {

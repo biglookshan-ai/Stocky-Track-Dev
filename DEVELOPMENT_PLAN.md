@@ -28,7 +28,7 @@
 | F4 | **虚拟库存（一等公民）** | 独立实体而非纯备注：给变体设虚拟库存数（关联到 bundle 产品和原因），全局清单页可见当前所有"虚拟库存在外"的 SKU，一键撤销（生成反向调整）。解决现在靠中文备注人肉追踪的痛点 |
 | F5 | **变体详情页** | 全周期库存+销量双曲线（任意日期区间缩放）、SKU/条码/价格/成本/各仓可用量/虚拟库存标记、该变体的完整账本流水 |
 | F6 | **历史导入** | Stocky Adjustments CSV（2022-06 至今 ~2200 单）+ Stock on hand History CSV 导入账本，新 app 上线即自带 4 年历史 |
-| F7 | **员工身份** | 从 App Bridge session token 取 Shopify admin 用户身份自动记录操作人；映射表（kay/Ling/yan/Emily…） |
+| F7 | **员工身份** | 从 App Bridge session token 取 Shopify admin 登录账号；调整单另存实际记录人、一个或多个经手员工及员工编号，适配共用账号 |
 
 ### P2 重要（8/31 前尽量，9月初完成也可接受）
 
@@ -69,8 +69,10 @@
 
 **Shopify app 配置**（Dev Dashboard 新建，参考 legacy custom app 停用备忘）：
 - embedded: true，managed install，Custom distribution → cinegearpro.myshopify.com
-- Scopes：`read_products, read_locations, write_inventory, read_orders, read_reports`
-  （write_inventory 隐含 read；read_orders 用于归因销售/退款；read_reports 用于 ShopifyQL 对账）
+- Scopes：`read_products, read_locations, write_inventory, read_orders, read_reports, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
+  （write_inventory 隐含 read；read_orders 用于归因销售/退款；read_reports 用于 ShopifyQL 对账；
+  transfer/shipment scopes 用于准确解析调拨编号、状态和生命周期。60 天以前订单客户信息另需
+  Shopify 批准 `read_all_orders`。）
 - Webhooks（GraphQL Admin API 订阅，HMAC 验证）：
   `inventory_levels/update`、`inventory_items/update`、`products/update`、`products/delete`、`locations/create|update`、`orders/create`、`refunds/create`
 

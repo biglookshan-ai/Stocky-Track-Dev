@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildInventoryAdjustmentInput,
   csvCell,
+  newAdjustmentDisplayNumber,
   normalizeAdjustmentInput,
   shopifyAdjustmentReason,
 } from '../src/adjustment-core.js';
@@ -22,7 +23,34 @@ test('normalizes a valid multi-line adjustment draft', () => {
     reasonId: 4,
     notes: 'cycle count',
     lines: [{ itemId: 10, delta: -2 }, { itemId: 11, delta: 3 }],
+    recordedBy: null,
+    handledBy: [],
   });
+});
+
+test('normalizes recorded-by and multiple handled-by employees', () => {
+  const normalized = normalizeAdjustmentInput({
+    locationId: 1,
+    reasonId: 1,
+    lines: [{ itemId: 1, delta: -1 }],
+    recordedBy: { staffId: '3', name: 'Employee B' },
+    handledBy: [
+      { staffId: 4, name: 'Employee A' },
+      { name: 'Temporary helper' },
+    ],
+  });
+  assert.deepEqual(normalized.recordedBy, { staffId: 3, name: 'Employee B' });
+  assert.deepEqual(normalized.handledBy, [
+    { staffId: 4, name: 'Employee A' },
+    { staffId: null, name: 'Temporary helper' },
+  ]);
+});
+
+test('creates stable dated adjustment display numbers', () => {
+  assert.equal(
+    newAdjustmentDisplayNumber(17, new Date('2026-07-28T10:00:00Z')),
+    'ADJ-202607-00017',
+  );
 });
 
 test('rejects zero, fractional and duplicate draft lines', () => {

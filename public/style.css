@@ -9,6 +9,8 @@ body { margin: 0; font: 13px/1.55 -apple-system, "Segoe UI", Roboto, "PingFang S
 .topbar nav { display: flex; gap: 16px; }
 .topbar a { color: var(--sub); text-decoration: none; padding: 4px 2px; }
 .topbar a.active { color: var(--text); border-bottom: 2px solid var(--green); }
+.global-search { display: flex; align-items: center; gap: 6px; min-width: 260px; margin-left: auto; }
+.global-search input[type=search] { width: min(360px, 28vw); padding: 6px 10px; }
 main { max-width: 1260px; margin: 16px auto; padding: 0 14px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
 .card h2 { margin: 0 0 10px; font-size: 15px; line-height: 1.35; }
@@ -134,12 +136,20 @@ details.card[open] summary { margin-bottom: 12px; }
 .setting-row input[type=text] { width: 100%; }
 .setting-row label { white-space: nowrap; }
 .new-reason { grid-template-columns: minmax(180px, 1fr) 170px auto; padding-top: 8px; border-top: 1px solid var(--border); }
-.staff-list .setting-row { grid-template-columns: 120px minmax(150px, 1fr) auto; }
+.staff-list .setting-row, .new-staff { grid-template-columns: 120px 120px minmax(150px, 1fr) auto; }
 .staff-id { overflow-wrap: anywhere; }
 .form-grid { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr) minmax(280px, 1.5fr); gap: 12px; margin-bottom: 22px; }
 .form-grid label > span { display: block; margin-bottom: 5px; color: var(--sub); font-size: 11.5px; font-weight: 600; }
 .form-grid select, .form-grid input, .form-grid textarea { width: 100%; }
 .adjustment-basics { grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr); }
+.adjustment-people { display: grid; grid-column: 1 / -1; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 12px; padding: 12px; border-radius: 8px; background: var(--bg); }
+.adjustment-people label > span { display: block; margin-bottom: 5px; color: var(--sub); font-size: 11.5px; font-weight: 600; }
+.adjustment-people select, .adjustment-people input { width: 100%; }
+.participant-picker { display: flex; gap: 6px; }
+.participant-picker select { flex: 1; min-width: 0; }
+.participant-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.participant-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 12px; background: #e4e5e7; }
+.participant-chip button { display: inline; padding: 0; border: 0; background: transparent; color: var(--sub); font-size: 15px; line-height: 1; }
 .adjustment-basics .notes-field, .adjustment-basics .evidence-field { grid-column: 1 / -1; }
 .evidence-field > span { display: block; margin-bottom: 5px; color: var(--sub); font-size: 11.5px; font-weight: 600; }
 .evidence-picker input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -164,7 +174,7 @@ button.search-result:hover { background: #fafbfb; }
 .delta-sign.active.minus { border-color: var(--red); background: #fff1ed; color: var(--red); }
 .empty-state { margin: 10px 0 18px; padding: 24px; border: 1px dashed var(--border); border-radius: 8px; color: var(--sub); text-align: center; }
 .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
-.adjustment-overview { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.adjustment-overview { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .adjustment-notes { margin-top: 14px; padding: 10px 12px; background: var(--bg); border-radius: 8px; }
 .adjustment-notes p { margin: 4px 0 0; white-space: pre-wrap; }
 .adjustment-evidence { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
@@ -178,6 +188,15 @@ button.search-result:hover { background: #fafbfb; }
 .attachment-meta span { color: var(--sub); font-size: 11.5px; }
 .adjustment-error { border-color: #f3b7a7; background: #fff4f1; color: #7a271a; }
 .warning { color: var(--amber); }
+.history-filters { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) minmax(140px, 1fr) repeat(2, 145px) auto; gap: 8px; margin-bottom: 12px; }
+.history-filters input, .history-filters select { width: 100%; }
+.search-section h2 { margin-bottom: 2px; }
+.search-section .result-count { margin-bottom: 10px; }
+.search-result-list { display: grid; gap: 0; }
+.search-result-row { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(160px, 1fr) auto; gap: 16px; align-items: center; padding: 10px 4px; border-bottom: 1px solid var(--border); color: inherit; text-decoration: none; }
+.search-result-row:last-child { border-bottom: 0; }
+.search-result-row:hover { background: #fafbfb; }
+.search-result-row .arrow { color: var(--blue); font-size: 16px; }
 @media (max-width: 800px) {
   .overview-grid, .system-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sync-list, .health-grid, .event-overview { grid-template-columns: 1fr; }
@@ -185,14 +204,16 @@ button.search-result:hover { background: #fafbfb; }
   .event-overview > div:last-child { padding-bottom: 0; border-bottom: 0; }
   .filter-grid, .adjustment-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .filter-grid input[type=search] { grid-column: 1 / -1; }
-  .settings-grid, .form-grid, .adjustment-overview { grid-template-columns: 1fr; }
+  .settings-grid, .form-grid, .adjustment-overview, .adjustment-people { grid-template-columns: 1fr; }
   .setting-row, .new-reason, .staff-list .setting-row { grid-template-columns: 1fr; }
   .item-picker { align-items: stretch; flex-direction: column; }
   .picker-search input { width: 100%; }
+  .global-search { display: none; }
+  .history-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
   input[type=search] { width: 100%; }
-  .overview-grid, .system-stat-grid, .product-summary, .filter-grid, .adjustment-filters { grid-template-columns: 1fr; }
+  .overview-grid, .system-stat-grid, .product-summary, .filter-grid, .adjustment-filters, .history-filters { grid-template-columns: 1fr; }
   .filter-grid input[type=search] { grid-column: auto; }
   .card-heading { align-items: flex-start; flex-direction: column; }
 }

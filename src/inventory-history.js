@@ -417,6 +417,15 @@ export async function runHistorySync(ctx, {
       windowEnd = windowStart;
     }
   }
+  // Once provisional webhook ledger rows have been attached to the enriched
+  // ShopifyQL event, remove the now-empty placeholder. This keeps the visible
+  // history at one business event per operation without losing immediacy.
+  await q(`DELETE FROM inventory_events e
+           WHERE e.source_type='unknown'
+             AND e.shopify_group_gid LIKE 'webhook:%'
+             AND NOT EXISTS (
+               SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id
+             )`);
   const summary = {
     cursor: incremental ? end.toISOString() : requestedStart.toISOString(),
     fetched, inserted, matched, skipped,

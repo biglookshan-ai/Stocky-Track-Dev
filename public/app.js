@@ -141,6 +141,7 @@ const ACTIVITY_LABEL = {
   inventory_correction: 'Inventory correction',
   count: 'Inventory manually counted',
   inventory_count: 'Inventory manually counted',
+  inventory_updated: 'Inventory updated',
   received: 'Inventory received',
   return_restock: 'Items restocked',
   damaged: 'Damaged',
@@ -179,13 +180,23 @@ const referenceCell = (row, shopHandle) => {
   const type = row.reference_document_type || ref?.type;
   const id = row.reference_document_id || ref?.id;
   if (!type && !id) return '<span class="muted">—</span>';
-  const labels = { Order: 'Order', PurchaseOrder: 'Purchase order', Transfer: 'Transfer' };
+  const labels = {
+    Order: 'Order', PurchaseOrder: 'Purchase order',
+    Transfer: 'Transfer', InventoryTransfer: 'Transfer', Adjustment: 'Adjustment',
+  };
   const label = labels[type] || String(type || 'Reference').replace(/([a-z])([A-Z])/g, '$1 $2');
-  if (type === 'Order' && id && shopHandle) {
-    const url = `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/orders/${encodeURIComponent(id)}`;
-    return `<a class="reference-link" href="${url}" target="_blank" rel="noopener">${esc(label)} #${esc(id)} ↗</a>`;
-  }
-  return `${esc(label)}${id ? ` #${esc(id)}` : ''}`;
+  const fallbackUrl = type === 'Order' && id && shopHandle
+    ? `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/orders/${encodeURIComponent(id)}`
+    : null;
+  const url = row.reference_admin_url || fallbackUrl;
+  const title = row.reference_name || `${label}${id ? ` #${id}` : ''}`;
+  const details = [
+    row.reference_customer_name,
+    row.reference_status,
+  ].filter(Boolean).map((value) => esc(value)).join(' · ');
+  return `${url
+    ? `<a class="reference-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(title)} ↗</a>`
+    : esc(title)}${details ? `<div class="muted small">${details}</div>` : ''}`;
 };
 const eventRows = (rows, shopHandle) => rows.map((event) => `<tr>
   <td>${fmtDate(event.occurred_at)}</td>
@@ -266,7 +277,8 @@ async function viewDashboard() {
     : backfill?.error
       ? { text: '历史同步已暂停', className: 'warning' }
       : { text: '自动运行中', className: 'success' };
-  const hasAttention = s.webhookBacklog > 20 || s.pendingAttribution > 100 || s.openAlerts > 0;
+  const hasAttention = s.webhookBacklog > 20 || s.webhookErrors > 0
+    || s.pendingAttribution > 100 || s.openAlerts > 0;
   const coverage = s.events.first ? `${new Date(s.events.first).toLocaleDateString('zh-CN')} 至今` : '尚无记录';
   app.innerHTML = `
     <div class="page-heading">
@@ -285,7 +297,7 @@ async function viewDashboard() {
         </div>
       </div>
       <div class="sync-list">
-        <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；新修改通常几秒内出现。</div></div>
+        <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；最近接收 ${fmtDate(s.webhookState?.last_inventory_at || s.webhookState?.last_received_at)}，处理 ${fmtDate(s.webhookState?.last_processed_at)}。</div></div>
         <div><strong>每日库存核对</strong><div class="muted">${snap ? `上次完成 ${fmtDate(snap.finishedAt || snap.snapDate)}，自动修正 ${snap.driftHealed} 处差异。` : '尚未完成首次核对。'}</div></div>
         <div><strong>历史记录</strong><div class="muted">${backfill?.running
           ? `正在进行${backfillPct ? `（约 ${backfillPct}%）` : ''}，已读取 ${backfill.fetched || 0} 行；不影响当前页面使用。`
@@ -308,7 +320,7 @@ async function viewDashboard() {
     <details class="card system-details">
       <summary>系统状态说明 ${hasAttention ? `<span class="badge unknown">${s.openAlerts} 条需复核</span>` : ''}</summary>
       <div class="health-grid">
-        <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。通常应为 0，短暂增加后会自动清空。</p></div>
+        <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。处理错误 ${s.webhookErrors || 0} 条；通常两者都应为 0。</p></div>
         <div><strong>归因处理中：${s.pendingAttribution}</strong><p>数量变化已保存，系统正在匹配对应的订单、员工或 App；不会影响库存记录。</p></div>
         <div><strong>对账提醒：${s.openAlerts}</strong><p>每日核对发现本地推算与 Shopify 实际值曾不同；数量已自动修正，提醒保留供人工复核。</p></div>
       </div>
@@ -595,12 +607,29 @@ async function viewSystem() {
 async function viewHistory() {
   app.innerHTML = '<div class="card">加载中…</div>';
   let page = 1;
+  const filters = { q: '', person: '', source: '', dateFrom: '', dateTo: '' };
   const load = async () => {
-    const result = await api(`/history?page=${page}&limit=50`);
+    const params = new URLSearchParams({ ...filters, page, limit: 50 });
+    const result = await api(`/history?${params}`);
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
     app.innerHTML = `
       <div class="page-heading"><div><h1>修改记录</h1><p class="muted">全店库存操作按事件合并显示，可查看操作人、App 和关联订单。</p></div></div>
       <div class="card">
+        <div class="history-filters">
+          <input id="history-q" type="search" value="${esc(filters.q)}" placeholder="商品、Barcode、SKU、订单或调整编号">
+          <input id="history-person" type="search" value="${esc(filters.person)}" placeholder="员工或 App">
+          <select id="history-source">
+            <option value="">全部来源</option>
+            ${[
+              ['sale', 'Sale'], ['refund', 'Return'], ['transfer', 'Transfer'],
+              ['adjustment', 'Adjustment'], ['staff', 'Staff'], ['app', 'App'],
+              ['unknown', 'Pending attribution'],
+            ].map(([value, label]) => `<option value="${value}" ${filters.source === value ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+          <input id="history-from" type="date" value="${esc(filters.dateFrom)}" aria-label="开始日期">
+          <input id="history-to" type="date" value="${esc(filters.dateTo)}" aria-label="结束日期">
+          <button id="history-filter" class="secondary">应用</button>
+        </div>
         <div class="table-scroll"><table class="store-history">
           <thead><tr><th>Date</th><th>Activity</th><th>Created by</th><th>Product</th><th>Location</th><th>Reference</th></tr></thead>
           <tbody>${result.rows.map((row) => {
@@ -619,6 +648,22 @@ async function viewHistory() {
           <button id="history-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : `<span class="muted">共 ${result.total} 次修改</span>`}</div>
       </div>
       <div class="notice">这里显示的是业务层面的修改事件，不再展示系统内部的逐状态技术流水。商品详情页可查看每次修改对 Available、On hand 等状态的具体影响。</div>`;
+    const applyFilters = () => {
+      filters.q = $('#history-q').value.trim();
+      filters.person = $('#history-person').value.trim();
+      filters.source = $('#history-source').value;
+      filters.dateFrom = $('#history-from').value;
+      filters.dateTo = $('#history-to').value;
+      page = 1;
+      load();
+    };
+    $('#history-filter').onclick = applyFilters;
+    $('#history-source').onchange = applyFilters;
+    for (const selector of ['#history-q', '#history-person']) {
+      $(selector).addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') applyFilters();
+      });
+    }
     if ($('#history-prev')) $('#history-prev').onclick = () => { page--; load(); };
     if ($('#history-next')) $('#history-next').onclick = () => { page++; load(); };
   };
@@ -627,7 +672,7 @@ async function viewHistory() {
 
 async function viewHistoryEvent(id) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const { event, rows, shopHandle } = await api(`/history/${id}`);
+  const { event, rows, adjustment, shopHandle } = await api(`/history/${id}`);
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>修改记录详情</h1><p class="muted">查看本次操作涉及的全部商品与 Shopify 返回的库存状态变化。</p></div>
@@ -639,6 +684,12 @@ async function viewHistoryEvent(id) {
       <div><span>Created by</span><div>${actorCell(event)}</div></div>
       <div><span>Reference</span><div>${referenceCell(event, shopHandle)}</div></div>
     </div>
+    ${adjustment ? `<div class="card event-overview">
+      <div><span>Adjustment</span><strong><a class="item-link" href="#/adjustments/${adjustment.id}">${esc(adjustment.display_number || '查看调整单')}</a></strong></div>
+      <div><span>Shopify account</span><strong>${esc(adjustment.login_account_name || '—')}</strong></div>
+      <div><span>Recorded by</span><strong>${esc(adjustment.recorded_by_name || '—')}</strong></div>
+      <div><span>Handled by</span><strong>${esc(adjustment.handled_by_names || '—')}</strong></div>
+    </div>${adjustment.notes ? `<div class="notice"><strong>Notes：</strong>${esc(adjustment.notes)}</div>` : ''}` : ''}
     <div class="card">
       <div class="card-heading"><div><h2>涉及商品</h2><p class="muted compact">共 ${rows.length} 个商品 / 仓位组合，Barcode 为主要识别编号。</p></div></div>
       <div class="table-scroll"><table class="event-detail-table">
@@ -674,7 +725,8 @@ const ADJUSTMENT_STATUS = {
 };
 const adjustmentStatus = (status) =>
   `<span class="status-pill adjustment-${esc(status)}">${ADJUSTMENT_STATUS[status] || esc(status)}</span>`;
-const adjustmentNumber = (number) => `ADJ-${String(number || 0).padStart(5, '0')}`;
+const adjustmentNumber = (number, displayNumber = null) =>
+  displayNumber || `ADJ-${String(number || 0).padStart(5, '0')}`;
 
 async function viewAdjustments() {
   const options = await api('/adjustment-options');
@@ -718,12 +770,19 @@ async function viewAdjustments() {
             <button id="add-reason" class="secondary small-button">添加</button></div>
         </section>
         <section>
-          <div class="section-heading"><div><h2>员工名称</h2><p class="muted compact">把 Shopify user ID 映射为修改记录中显示的姓名。</p></div></div>
+          <div class="section-heading"><div><h2>员工资料</h2><p class="muted compact">Shopify 账号可映射姓名；共用账号的实际经手员工也可单独建立。</p></div></div>
           <div class="staff-list">${options.staff.map((person) => `<div class="setting-row">
             <span class="muted staff-id">${esc(person.shopify_user_id || '—')}</span>
+            <input type="text" value="${esc(person.employee_code || '')}" placeholder="员工编号" data-staff-code="${person.id}">
             <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}">
             <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
-          </div>`).join('') || '<p class="muted">员工首次打开应用后会自动出现在这里。</p>'}</div>
+          </div>`).join('') || '<p class="muted">尚无员工资料。</p>'}</div>
+          <div class="setting-row new-staff">
+            <span class="muted">本地员工</span>
+            <input id="new-staff-code" type="text" placeholder="员工编号（可选）">
+            <input id="new-staff-name" type="text" placeholder="员工姓名">
+            <button id="add-staff" class="secondary small-button">添加</button>
+          </div>
         </section>
       </div>
     </details>`;
@@ -743,11 +802,12 @@ async function viewAdjustments() {
     $('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
       <thead><tr><th>Adjustment</th><th>Status</th><th>Reason</th><th>Created by</th><th>Location</th><th class="num">Items</th><th class="num">Total change</th><th>Created</th><th></th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
-        <td><a class="item-link" href="#/adjustments/${row.id}"><strong>${adjustmentNumber(row.number)}</strong></a>${row.notes ? `<div class="muted small">${esc(row.notes)}</div>` : ''}</td>
+        <td><a class="item-link" href="#/adjustments/${row.id}"><strong>${adjustmentNumber(row.number, row.display_number)}</strong></a>${row.notes ? `<div class="muted small">${esc(row.notes)}</div>` : ''}</td>
         <td>${adjustmentStatus(row.status)}${row.apply_error ? `<div class="error small">${esc(row.apply_error)}</div>` : ''}</td>
-        <td>${esc(row.reason || '—')}</td><td>${esc(row.staff_name || '—')}</td><td>${esc(row.locations || '—')}</td>
+        <td>${esc(row.reason || '—')}</td><td>${esc(row.recorded_by_name || '—')}
+          <div class="muted small">Created via: ${esc(row.created_by_account_name || row.login_account_name || '—')}${row.applied_by_account_name ? ` · Applied via: ${esc(row.applied_by_account_name)}` : ''}${row.handled_by_names ? ` · Handled: ${esc(row.handled_by_names)}` : ''}</div></td><td>${esc(row.locations || '—')}</td>
         <td class="num">${row.line_count}</td><td class="num"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
-        <td>${fmtDate(row.created_at)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看 ${adjustmentNumber(row.number)}">→</a></td>
+        <td>${fmtDate(row.created_at)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看 ${adjustmentNumber(row.number, row.display_number)}">→</a></td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
     $('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
@@ -792,7 +852,10 @@ async function viewAdjustments() {
       try {
         await api(`/staff/${button.dataset.id}`, {
           method: 'PATCH',
-          body: JSON.stringify({ displayName: $(`[data-staff-name="${button.dataset.id}"]`).value }),
+          body: JSON.stringify({
+            displayName: $(`[data-staff-name="${button.dataset.id}"]`).value,
+            employeeCode: $(`[data-staff-code="${button.dataset.id}"]`).value,
+          }),
         });
         await viewAdjustments();
         $('#adjustment-settings').open = true;
@@ -805,6 +868,20 @@ async function viewAdjustments() {
       await api('/adjustment-reasons', {
         method: 'POST',
         body: JSON.stringify({ name: $('#new-reason-name').value, direction: $('#new-reason-direction').value }),
+      });
+      await viewAdjustments();
+      $('#adjustment-settings').open = true;
+    } catch (error) { alert(`添加失败：${error.message}`); event.target.disabled = false; }
+  };
+  $('#add-staff').onclick = async (event) => {
+    event.target.disabled = true;
+    try {
+      await api('/staff', {
+        method: 'POST',
+        body: JSON.stringify({
+          displayName: $('#new-staff-name').value,
+          employeeCode: $('#new-staff-code').value,
+        }),
       });
       await viewAdjustments();
       $('#adjustment-settings').open = true;
@@ -835,13 +912,44 @@ async function viewAdjustmentForm(id = null) {
     delta: Number(line.delta),
   }));
   let pendingFiles = [];
+  let handledBy = (adjustment?.handled_by || []).map((person) => ({
+    staffId: person.staff_id || null,
+    name: person.name,
+  }));
+  const recordedStaffId = adjustment?.recorded_by?.staff_id
+    || options.currentStaff?.id || options.staff.find((person) => person.active)?.id || null;
+  const recordedIsCustom = Boolean(adjustment?.recorded_by && !adjustment.recorded_by.staff_id);
   app.innerHTML = `
-    <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number)}` : '新建库存调整'}</h1>
+    <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number, adjustment.display_number)}` : '新建库存调整'}</h1>
       <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div><a class="back-link" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">← 返回</a></div>
     <div class="card adjustment-form">
       <div class="form-grid adjustment-basics">
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
         <label><span>Adjustment reason</span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
+        <div class="adjustment-people">
+          <label><span>Shopify login account</span>
+            <input type="text" readonly value="${esc(options.currentStaff?.display_name || '无法识别')}" title="${esc(options.currentStaff?.shopify_user_id || '')}">
+          </label>
+          <label><span>Recorded by（实际做记录的人）</span>
+            <select id="draft-recorded">
+              ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}" ${!recordedIsCustom && Number(recordedStaffId) === person.id ? 'selected' : ''}>${esc(person.display_name)}${person.employee_code ? ` · ${esc(person.employee_code)}` : ''}</option>`).join('')}
+              <option value="custom" ${recordedIsCustom ? 'selected' : ''}>手动填写姓名…</option>
+            </select>
+            <input id="draft-recorded-custom" type="text" maxlength="120" value="${recordedIsCustom ? esc(adjustment.recorded_by.name) : ''}" placeholder="记录员工姓名" ${recordedIsCustom ? '' : 'hidden'}>
+          </label>
+          <div>
+            <label><span>Handled by（拿取/处理商品的人，可多人）</span></label>
+            <div class="participant-picker">
+              <select id="draft-handled">
+                ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}">${esc(person.display_name)}${person.employee_code ? ` · ${esc(person.employee_code)}` : ''}</option>`).join('')}
+                <option value="custom">手动填写姓名…</option>
+              </select>
+              <button id="add-handled" type="button" class="secondary small-button">添加</button>
+            </div>
+            <input id="draft-handled-custom" type="text" maxlength="120" placeholder="经手员工姓名" hidden>
+            <div id="handled-chips"></div>
+          </div>
+        </div>
         <label class="notes-field"><span>Notes</span><textarea id="draft-notes" maxlength="10000" rows="4" placeholder="详细填写调整原因、票据编号、处理过程或内部说明">${esc(adjustment?.notes || '')}</textarea></label>
         <div class="evidence-field">
           <span>Evidence attachments</span>
@@ -860,6 +968,46 @@ async function viewAdjustmentForm(id = null) {
       <div id="draft-lines"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">取消</a><button id="save-draft">保存 Draft</button></div>
     </div>`;
+
+  const renderHandled = () => {
+    $('#handled-chips').innerHTML = handledBy.length
+      ? `<div class="participant-chips">${handledBy.map((person, index) => `<span class="participant-chip">${esc(person.name)}<button type="button" data-remove-handled="${index}" aria-label="移除">×</button></span>`).join('')}</div>`
+      : '<div class="muted small">尚未添加经手员工。</div>';
+    document.querySelectorAll('[data-remove-handled]').forEach((button) => {
+      button.onclick = () => {
+        handledBy.splice(Number(button.dataset.removeHandled), 1);
+        renderHandled();
+      };
+    });
+  };
+  const toggleRecordedCustom = () => {
+    $('#draft-recorded-custom').hidden = $('#draft-recorded').value !== 'custom';
+  };
+  const toggleHandledCustom = () => {
+    $('#draft-handled-custom').hidden = $('#draft-handled').value !== 'custom';
+  };
+  $('#draft-recorded').onchange = toggleRecordedCustom;
+  $('#draft-handled').onchange = toggleHandledCustom;
+  $('#add-handled').onclick = () => {
+    const selected = $('#draft-handled').value;
+    let person;
+    if (selected === 'custom') {
+      const name = $('#draft-handled-custom').value.trim();
+      if (!name) return alert('请填写经手员工姓名');
+      person = { staffId: null, name };
+    } else {
+      const staffId = Number(selected.replace('staff:', ''));
+      const staff = options.staff.find((entry) => entry.id === staffId);
+      person = { staffId, name: staff?.display_name || '' };
+    }
+    const duplicate = handledBy.some((entry) => person.staffId
+      ? Number(entry.staffId) === person.staffId
+      : !entry.staffId && entry.name.toLocaleLowerCase() === person.name.toLocaleLowerCase());
+    if (duplicate) return alert('该经手员工已添加');
+    handledBy.push(person);
+    $('#draft-handled-custom').value = '';
+    renderHandled();
+  };
 
   const selectedDirection = () => $('#draft-reason').selectedOptions[0]?.dataset.direction || 'any';
   const normalizeLineDirection = (line) => {
@@ -984,6 +1132,10 @@ async function viewAdjustmentForm(id = null) {
         locationId: Number($('#draft-location').value),
         reasonId: Number($('#draft-reason').value),
         notes: $('#draft-notes').value,
+        recordedBy: $('#draft-recorded').value === 'custom'
+          ? { name: $('#draft-recorded-custom').value.trim() }
+          : { staffId: Number($('#draft-recorded').value.replace('staff:', '')) },
+        handledBy,
         lines: lines.map((line) => ({ itemId: line.itemId, delta: Number(line.delta) })),
       };
       const result = await api(id ? `/adjustments/${id}` : '/adjustments', {
@@ -1003,6 +1155,9 @@ async function viewAdjustmentForm(id = null) {
       location.hash = `#/adjustments/${result.id}`;
     } catch (error) { alert(`保存失败：${error.message}`); event.target.disabled = false; }
   };
+  toggleRecordedCustom();
+  toggleHandledCustom();
+  renderHandled();
   renderPendingFiles();
   renderLines();
 }
@@ -1013,7 +1168,7 @@ async function viewAdjustment(id) {
   const total = adjustment.lines.reduce((sum, line) => sum + Number(line.delta), 0);
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
-    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number)}</h1><p class="muted">库存调整详情与 Shopify 写入状态。</p></div>
+    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)}</h1><p class="muted">库存调整详情与 Shopify 写入状态。</p></div>
       <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
         ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
@@ -1023,7 +1178,10 @@ async function viewAdjustment(id) {
     <div class="card event-overview adjustment-overview">
       <div><span>Status</span><strong>${adjustmentStatus(adjustment.status)}</strong></div>
       <div><span>Adjustment reason</span><strong>${esc(adjustment.reason || '—')}</strong></div>
-      <div><span>Created by</span><strong>${esc(adjustment.staff_name || '—')}</strong></div>
+      <div><span>Created via Shopify account</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
+      <div><span>Applied via Shopify account</span><strong>${esc(adjustment.applied_by_account_name || '—')}</strong></div>
+      <div><span>Recorded by</span><strong>${esc(adjustment.recorded_by?.name || '—')}</strong></div>
+      <div><span>Handled by</span><strong>${esc(adjustment.handled_by?.map((person) => person.name).join(', ') || '—')}</strong></div>
       <div><span>Location</span><strong>${esc(adjustment.lines[0]?.location || '—')}</strong></div>
       <div><span>Total change</span><strong class="${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}">${signed(total)}</strong></div>
       <div><span>${adjustment.applied_at ? 'Applied' : 'Created'}</span><strong>${fmtDate(adjustment.applied_at || adjustment.created_at)}</strong></div>
@@ -1071,6 +1229,39 @@ async function viewAdjustment(id) {
   };
 }
 
+async function viewSearch(query) {
+  const term = String(query || '').trim();
+  if (!term) {
+    app.innerHTML = '<div class="card"><p class="muted">请输入商品、Barcode、SKU、人员、订单、调拨或调整编号。</p></div>';
+    return;
+  }
+  app.innerHTML = '<div class="card">搜索中…</div>';
+  const result = await api(`/search?q=${encodeURIComponent(term)}`);
+  $('#global-search-input').value = term;
+  const section = (title, rows, render) => `<section class="card search-section">
+    <h2>${title}</h2><div class="muted result-count">${rows.length ? `${rows.length} 个结果` : '没有匹配结果'}</div>
+    ${rows.length ? `<div class="search-result-list">${rows.map(render).join('')}</div>` : ''}
+  </section>`;
+  app.innerHTML = `
+    <div class="page-heading"><div><h1>搜索结果</h1><p class="muted">“${esc(term)}” 的商品、人员与操作记录。</p></div></div>
+    ${section('商品', result.products, (row) => `<a class="search-result-row" href="#/items/${row.id}">
+      <div><span class="event-product-title">${productName(row)}</span>${codeMeta(row)}</div>
+      <div>Available <strong>${row.available}</strong></div><span class="arrow">→</span>
+    </a>`)}
+    ${section('库存调整', result.adjustments, (row) => `<a class="search-result-row" href="#/adjustments/${row.id}">
+      <div><strong>${esc(adjustmentNumber(row.number, row.display_number))}</strong><div class="muted small">${esc(row.reason || '—')}</div></div>
+      <div>${esc(row.recorded_by_name || row.login_account_name || '—')} · ${fmtDate(row.created_at)}</div><span class="arrow">→</span>
+    </a>`)}
+    ${section('修改记录', result.history, (row) => `<a class="search-result-row" href="#/history/${row.id}">
+      <div><strong>${esc(activityLabel(row.activity))}</strong><div class="muted small">${row.product_count === 1 ? productName(row) : `${row.product_count} 个商品变体`}</div></div>
+      <div>${referenceCell(row, result.shopHandle)}<div class="muted small">${fmtDate(row.occurred_at)}</div></div><span class="arrow">→</span>
+    </a>`)}
+    ${section('人员', result.people, (row) => `<div class="search-result-row">
+      <div><strong>${esc(row.display_name)}</strong><div class="muted small">${esc(row.employee_code || '无员工编号')}</div></div>
+      <div class="muted">${row.shopify_user_id ? `Shopify account ${esc(row.shopify_user_id)}` : '本地员工资料'}</div><span></span>
+    </div>`)}`;
+}
+
 // ---- router ----
 async function route() {
   clearMediaObjectUrls();
@@ -1086,6 +1277,10 @@ async function route() {
     const adjustment = hash.match(/^#\/adjustments\/(\d+)$/);
     if (adjustment) return await viewAdjustment(adjustment[1]);
     if (hash === '#/adjustments/new') return await viewAdjustmentForm();
+    if (hash.startsWith('#/search')) {
+      const query = new URLSearchParams(hash.split('?')[1] || '').get('q') || '';
+      return await viewSearch(query);
+    }
     if (hash.startsWith('#/items')) return await viewItems();
     if (hash.startsWith('#/history')) return await viewHistory();
     if (hash.startsWith('#/adjustments')) return await viewAdjustments();
@@ -1095,5 +1290,10 @@ async function route() {
     app.innerHTML = `<div class="card"><p class="error">${esc(e.message)}</p></div>`;
   }
 }
+$('#global-search').onsubmit = (event) => {
+  event.preventDefault();
+  const query = $('#global-search-input').value.trim();
+  if (query) location.hash = `#/search?q=${encodeURIComponent(query)}`;
+};
 window.addEventListener('hashchange', route);
 route();

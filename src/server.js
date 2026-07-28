@@ -15,6 +15,7 @@ import {
   applyAdjustment,
   archiveAdjustment,
   createAdjustmentReason,
+  createStaff,
   getAdjustment,
   listAdjustmentOptions,
   listAdjustments,
@@ -23,6 +24,7 @@ import {
   updateAdjustmentReason,
   updateStaff,
 } from './adjustments.js';
+import { enrichReferences } from './references.js';
 import {
   deleteAdjustmentAttachment,
   getAdjustmentAttachment,
@@ -120,12 +122,24 @@ app.post('/webhooks', receiveWebhook);
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {
   try {
-    const [backlog, pending, snap] = await Promise.all([
-      q('SELECT count(*)::int n FROM webhook_events WHERE processed_at IS NULL'),
+    const [webhooks, pending, snap] = await Promise.all([
+      q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
+                count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
+                max(received_at) AS last_received_at,
+                max(processed_at) AS last_processed_at
+         FROM webhook_events`),
       q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
       getState('last_snapshot'),
     ]);
-    res.json({ ok: true, webhookBacklog: backlog.rows[0].n, pendingAttribution: pending.rows[0].n, lastSnapshot: snap });
+    res.json({
+      ok: true,
+      webhookBacklog: webhooks.rows[0].backlog,
+      webhookErrors: webhooks.rows[0].errors,
+      lastWebhookReceivedAt: webhooks.rows[0].last_received_at,
+      lastWebhookProcessedAt: webhooks.rows[0].last_processed_at,
+      pendingAttribution: pending.rows[0].n,
+      lastSnapshot: snap,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -163,11 +177,18 @@ function continueHistoryBackfill(ctx) {
 
 api.get('/status', async (req, res) => {
   try {
-    const [items, events, ledger, backlog, pending, alerts, reasons] = await Promise.all([
+    const [items, events, ledger, webhooks, pending, alerts, reasons] = await Promise.all([
       q(`SELECT count(*)::int n, count(*) FILTER (WHERE source='local')::int local FROM items WHERE status <> 'deleted'`),
-      q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_events`),
+      q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last
+         FROM inventory_events e
+         WHERE EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_ledger`),
-      q('SELECT count(*)::int n FROM webhook_events WHERE processed_at IS NULL'),
+      q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
+                count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
+                max(received_at) AS last_received_at,
+                max(processed_at) AS last_processed_at,
+                max(received_at) FILTER (WHERE topic='inventory_levels/update') AS last_inventory_at
+         FROM webhook_events`),
       q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
       q('SELECT count(*)::int n FROM reconcile_alerts WHERE NOT resolved'),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
@@ -189,7 +210,9 @@ api.get('/status', async (req, res) => {
       items: items.rows[0],
       events: events.rows[0],
       ledger: ledger.rows[0],
-      webhookBacklog: backlog.rows[0].n,
+      webhookBacklog: webhooks.rows[0].backlog,
+      webhookErrors: webhooks.rows[0].errors,
+      webhookState: webhooks.rows[0],
       pendingAttribution: pending.rows[0].n,
       openAlerts: alerts.rows[0].n,
       reasons: reasons.rows[0].n,
@@ -513,6 +536,12 @@ api.patch('/staff/:id', async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+api.post('/staff', async (req, res) => {
+  try {
+    res.status(201).json({ staff: await createStaff(req.body) });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 // Items list/search with business filters, inventory totals and last change.
 api.get('/items', async (req, res) => {
   try {
@@ -781,36 +810,176 @@ api.get('/items/:id/history', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+function historyFilters(query, params) {
+  const filters = [
+    'EXISTS (SELECT 1 FROM inventory_ledger visible_lg WHERE visible_lg.event_id=e.id)',
+  ];
+  const add = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+  const term = String(query.q || '').trim().slice(0, 120);
+  if (term) {
+    const p = add(`%${term}%`);
+    filters.push(`(
+      e.activity ILIKE ${p} OR e.reason ILIKE ${p}
+      OR e.staff_name ILIKE ${p} OR e.app_name ILIKE ${p}
+      OR e.reference_document_uri ILIKE ${p}
+      OR e.reference_document_type ILIKE ${p}
+      OR e.reference_document_id ILIKE ${p}
+      OR EXISTS (
+        SELECT 1
+        FROM inventory_ledger search_lg
+        JOIN items search_i ON search_i.id=search_lg.item_id
+        WHERE search_lg.event_id=e.id
+          AND (search_i.barcode ILIKE ${p} OR search_i.sku ILIKE ${p}
+            OR search_i.product_title ILIKE ${p}
+            OR search_i.variant_title ILIKE ${p} OR search_i.vendor ILIKE ${p})
+      )
+      OR EXISTS (
+        SELECT 1 FROM reference_documents search_rd
+        WHERE (search_rd.canonical_uri=e.reference_document_uri
+          OR search_rd.shopify_id=e.reference_document_id)
+          AND (search_rd.display_name ILIKE ${p}
+            OR search_rd.customer_name ILIKE ${p} OR search_rd.status ILIKE ${p})
+      )
+      OR EXISTS (
+        SELECT 1
+        FROM adjustments search_a
+        LEFT JOIN adjustment_participants search_ap
+          ON search_ap.adjustment_id=search_a.id
+        LEFT JOIN staff search_s
+          ON search_s.id IN (
+            search_a.staff_id, search_a.created_by_staff_id, search_a.applied_by_staff_id
+          )
+        WHERE e.reference_document_type='Adjustment'
+          AND search_a.number::text=e.reference_document_id
+          AND (search_a.display_number ILIKE ${p}
+            OR search_ap.display_name_snapshot ILIKE ${p}
+            OR search_s.display_name ILIKE ${p}
+            OR search_s.employee_code ILIKE ${p})
+      )
+    )`);
+  }
+  const person = String(query.person || '').trim().slice(0, 120);
+  if (person) {
+    const p = add(`%${person}%`);
+    filters.push(`(
+      e.staff_name ILIKE ${p} OR e.app_name ILIKE ${p}
+      OR EXISTS (
+        SELECT 1 FROM adjustments person_a
+        JOIN adjustment_participants person_ap ON person_ap.adjustment_id=person_a.id
+        WHERE e.reference_document_type='Adjustment'
+          AND person_a.number::text=e.reference_document_id
+          AND person_ap.display_name_snapshot ILIKE ${p}
+      )
+    )`);
+  }
+  const source = String(query.source || '').trim();
+  if (source && ['sale', 'refund', 'transfer', 'staff', 'app', 'adjustment', 'unknown'].includes(source)) {
+    const storedSource = { staff: 'admin_manual', app: 'external_app' }[source] || source;
+    filters.push(`e.source_type=${add(storedSource)}`);
+  }
+  const locationId = Number(query.locationId);
+  if (Number.isInteger(locationId) && locationId > 0) {
+    filters.push(`EXISTS (
+      SELECT 1 FROM inventory_ledger location_lg
+      WHERE location_lg.event_id=e.id AND location_lg.location_id=${add(locationId)}
+    )`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(query.dateFrom || ''))) {
+    filters.push(`e.occurred_at >= ${add(`${query.dateFrom}T00:00:00Z`)}::timestamptz`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(query.dateTo || ''))) {
+    filters.push(`e.occurred_at < ${add(`${query.dateTo}T00:00:00Z`)}::timestamptz + interval '1 day'`);
+  }
+  return filters.join(' AND ');
+}
+
+async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
+  const page = Math.max(1, Number(query.page || 1));
+  const pageSize = Math.min(maxLimit, Math.max(1, Number(query.limit || defaultLimit)));
+  const params = [];
+  const where = historyFilters(query, params);
+  const [count, rows] = await Promise.all([
+    q(`SELECT count(*)::int total FROM inventory_events e WHERE ${where}`, params),
+    q(`SELECT e.id, e.occurred_at, e.activity, e.reason, e.staff_name,
+              e.app_name, e.reference_document_uri, e.reference_document_type,
+              e.reference_document_id, e.source_type,
+              count(DISTINCT lg.item_id)::int product_count,
+              min(i.id)::int item_id,
+              min(i.product_title) AS product_title,
+              min(i.variant_title) AS variant_title,
+              min(i.sku) AS sku,
+              min(i.barcode) AS barcode,
+              min(i.vendor) AS vendor,
+              string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
+       FROM inventory_events e
+       JOIN inventory_ledger lg ON lg.event_id=e.id
+       JOIN items i ON i.id=lg.item_id
+       JOIN locations loc ON loc.id=lg.location_id
+       WHERE ${where}
+       GROUP BY e.id
+       ORDER BY e.occurred_at DESC, e.id DESC
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, pageSize, (page - 1) * pageSize]),
+  ]);
+  return { rows: rows.rows, page, pageSize, total: count.rows[0].total };
+}
+
 // Business-level adjustment events across the store. Technical child ledger
 // rows stay internal and no longer dominate the main navigation.
 api.get('/history', async (req, res) => {
   try {
-    const page = Math.max(1, Number(req.query.page || 1));
-    const pageSize = Math.min(100, Math.max(10, Number(req.query.limit || 50)));
-    const [count, rows] = await Promise.all([
-      q(`SELECT count(*)::int total FROM inventory_events e
-         WHERE EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)`),
-      q(`SELECT e.id, e.occurred_at, e.activity, e.reason, e.staff_name,
-                e.app_name, e.reference_document_uri, e.reference_document_type,
-                e.reference_document_id, e.source_type,
-                count(DISTINCT lg.item_id)::int product_count,
-                min(i.id)::int item_id,
-                min(i.product_title) AS product_title,
-                min(i.variant_title) AS variant_title,
-                min(i.sku) AS sku,
-                min(i.barcode) AS barcode,
-                min(i.vendor) AS vendor,
-                string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
-         FROM inventory_events e
-         JOIN inventory_ledger lg ON lg.event_id=e.id
-         JOIN items i ON i.id=lg.item_id
-         JOIN locations loc ON loc.id=lg.location_id
-         GROUP BY e.id
-         ORDER BY e.occurred_at DESC, e.id DESC
-         LIMIT $1 OFFSET $2`, [pageSize, (page - 1) * pageSize]),
-    ]);
+    const result = await historyRows(req.query);
+    const rows = await enrichReferences(
+      { shop: req.ctx.shop, token: req.ctx.token },
+      result.rows,
+    );
     res.json({
-      rows: rows.rows, page, pageSize, total: count.rows[0].total,
+      ...result, rows,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.get('/search', async (req, res) => {
+  try {
+    const term = String(req.query.q || '').trim().slice(0, 120);
+    if (!term) return res.json({ query: '', products: [], adjustments: [], people: [], history: [] });
+    const like = `%${term}%`;
+    const [products, adjustments, people, history] = await Promise.all([
+      q(`SELECT i.id, i.product_title, i.variant_title, i.barcode, i.sku, i.vendor,
+                COALESCE(sum(cl.available), 0)::int AS available
+         FROM items i
+         LEFT JOIN current_levels cl ON cl.item_id=i.id
+         WHERE i.status <> 'deleted'
+           AND (i.barcode ILIKE $1 OR i.sku ILIKE $1 OR i.product_title ILIKE $1
+             OR i.variant_title ILIKE $1 OR i.vendor ILIKE $1)
+         GROUP BY i.id
+         ORDER BY CASE WHEN i.barcode=$2 THEN 0 WHEN i.sku=$2 THEN 1 ELSE 2 END,
+                  i.product_title, i.variant_title
+         LIMIT 10`, [like, term]),
+      listAdjustments({ term, limit: 10 }),
+      q(`SELECT s.id, s.display_name, s.employee_code, s.shopify_user_id,
+                s.role, s.active
+         FROM staff s
+         WHERE s.display_name ILIKE $1 OR s.employee_code ILIKE $1
+           OR s.shopify_user_id ILIKE $1
+         ORDER BY s.active DESC, lower(s.display_name)
+         LIMIT 10`, [like]),
+      historyRows({ q: term, page: 1, limit: 10 }, { defaultLimit: 10, maxLimit: 10 }),
+    ]);
+    const enrichedHistory = await enrichReferences(
+      { shop: req.ctx.shop, token: req.ctx.token },
+      history.rows,
+    );
+    res.json({
+      query: term,
+      products: products.rows,
+      adjustments: adjustments.rows,
+      people: people.rows,
+      history: enrichedHistory,
       shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -849,6 +1018,29 @@ api.get('/history/:id', async (req, res) => {
          ORDER BY i.barcode, i.product_title, i.variant_title, loc.name`, [id]),
     ]);
     if (!event.rowCount) return res.status(404).json({ error: '修改记录不存在' });
+    const [enrichedEvent] = await enrichReferences(
+      { shop: req.ctx.shop, token: req.ctx.token },
+      event.rows,
+    );
+    let adjustment = null;
+    if (enrichedEvent.reference_document_type === 'Adjustment'
+      && /^\d+$/.test(String(enrichedEvent.reference_document_id || ''))) {
+      const local = await q(
+        `SELECT a.id, a.display_number, a.notes,
+                login.display_name AS login_account_name,
+                max(ap.display_name_snapshot) FILTER (WHERE ap.role='recorded_by')
+                  AS recorded_by_name,
+                string_agg(ap.display_name_snapshot, ', ' ORDER BY ap.id)
+                  FILTER (WHERE ap.role='handled_by') AS handled_by_names
+         FROM adjustments a
+         LEFT JOIN staff login ON login.id=a.staff_id
+         LEFT JOIN adjustment_participants ap ON ap.adjustment_id=a.id
+         WHERE a.number=$1
+         GROUP BY a.id, login.display_name`,
+        [Number(enrichedEvent.reference_document_id)],
+      );
+      adjustment = local.rows[0] || null;
+    }
     const rows = lines.rows.map((row) => ({
       ...row,
       unavailable_delta: row.direct_unavailable_delta !== null
@@ -861,8 +1053,9 @@ api.get('/history/:id', async (req, res) => {
           ? null : Number(row.on_hand_after) - Number(row.available_after),
     }));
     res.json({
-      event: event.rows[0],
+      event: enrichedEvent,
       rows,
+      adjustment,
       shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }

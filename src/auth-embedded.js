@@ -65,7 +65,7 @@ async function resolveStaff(payload) {
     `INSERT INTO staff (shopify_user_id, display_name)
      VALUES ($1, $2)
      ON CONFLICT (shopify_user_id) DO UPDATE SET shopify_user_id = EXCLUDED.shopify_user_id
-     RETURNING id, display_name, role`,
+     RETURNING id, shopify_user_id, employee_code, display_name, role, active`,
     [uid, `user ${uid}`]  // display name is edited later in Settings → 员工映射
   );
   return r.rows[0] || null;

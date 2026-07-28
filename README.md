@@ -12,6 +12,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/ledger.js` — 账本写入（append-only）+ current_levels 基线
 - `src/attribution.js` — 待归因流水 ↔ 订单/退款匹配
 - `src/inventory-history.js` — ShopifyQL 调整历史同步；员工/App/原因/引用/库存状态归并
+- `src/references.js` — Order / Transfer 编号、客户、状态与 Shopify Admin 链接解析及缓存
 - `src/snapshot.js` — 每日全量拉取 = 快照 + 漂移对账自愈
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
 - `src/adjustments.js` — 调整单 Draft / 提交 / 幂等重试 / 归档 / 原因与员工映射 / CSV
@@ -27,20 +28,26 @@ Unavailable、Committed、Available、On hand、Incoming。全店每条修改事
 涉及商品、仓位和各库存状态变化，多商品事件也会列出完整明细。
 
 「库存调整」支持 Stocky 风格的多商品 Draft：按 Barcode / SKU / 标题搜索、选择仓位和
-Adjustment reason、记录员工和详细备注，使用明确的 `− / +` 方向与数量预览
+Adjustment reason，并分别记录 Shopify 登录账号、实际记录员工和一个或多个经手员工。
+每张新调整单使用 `ADJ-YYYYMM-xxxxx` 稳定编号；详细备注配合明确的 `− / +` 方向与数量预览
 Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图片、视频、PDF 和常用
 办公文件作为证据（文件存储在 `DATA_DIR` 对应 Volume，元数据存储在 Postgres）。提交使用
 持久幂等键和 `changeFromQuantity` 原值校验，网络结果未知时可安全重试，并支持状态筛选、
 归档及 CSV 导出。
 
+顶栏全局搜索与修改记录筛选可按人员、商品名称、Brand、Barcode、SKU、订单/调拨引用和
+调整编号查询。库存 webhook 到达后会先立即显示为 Pending attribution；ShopifyQL 后续会
+在同一账本行补齐真实 Activity、员工/App 和业务单据，不会等几分钟后才首次出现。
+
 ## 部署（Railway）
 
 1. Dev Dashboard 建 app：embedded=true、managed install、Custom distribution → cinegearpro
-   Scopes: `read_products, read_locations, write_inventory, read_orders, read_reports`
+   Scopes: `read_products, read_locations, write_inventory, read_orders, read_reports, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
+   如需读取 60 天以前的订单客户信息，再申请 `read_all_orders`。
 2. Railway: 新项目 → Deploy from GitHub → 加 **Postgres** 插件 → 加 **Volume** 挂 `/data`
 3. 环境变量：见 `.env.example`（`APP_URL` 填 Railway 域名；`DATABASE_URL` 由 Railway 注入）
 4. Dev Dashboard 把 App URL 指向 Railway 域名 → 商店安装 → 从 Shopify 后台打开 app
-5. 应用内「首页 → 维护工具」依次运行：**同步商品目录** → **重新注册实时接收**
+5. 修改 scope 后重新授权/安装应用；再在「首页 → 维护工具」依次运行：**同步商品目录** → **重新注册实时接收**
 6. 在维护工具运行一次「同步 Shopify 最近 180 天」
 7. 之后账本自动记录；每 5 分钟补充完整归因，每日 03:00 UTC 快照对账（`SNAPSHOT_HOUR` 可调）
 
@@ -62,7 +69,7 @@ npm test               # 纯逻辑单元测试（无需数据库）
 ## M0 验收清单
 
 - [ ] 初始同步完成（~9500 变体，首页显示数量）
-- [ ] Webhooks 全部注册成功（9 个 topic）
+- [ ] 维护工具列出的 Webhooks 全部注册成功
 - [ ] 团队在 Stocky/POS 里的真实操作出现在修改记录（Created by 和引用单据正确）
 - [ ] 连续 3 天快照 driftHealed = 0（或漂移可解释）
 - [ ] /healthz 返回 ok 且 backlog 不增长

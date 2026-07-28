@@ -3,6 +3,7 @@ import { graphql, idempotencyKey } from './shopify.js';
 import {
   buildInventoryAdjustmentInput,
   csvCell,
+  newAdjustmentDisplayNumber,
   normalizeAdjustmentInput,
 } from './adjustment-core.js';
 import { listAdjustmentAttachments } from './adjustment-attachments.js';
@@ -21,6 +22,60 @@ async function transaction(fn) {
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function participantSnapshot(client, person, fallbackStaffId = null) {
+  const staffId = person?.staffId || fallbackStaffId;
+  if (staffId) {
+    const staff = await client.query(
+      `SELECT id, display_name FROM staff WHERE id=$1 AND active`,
+      [staffId],
+    );
+    if (!staff.rowCount) throw new Error('所选员工不存在或已停用');
+    return {
+      staffId: staff.rows[0].id,
+      name: person?.name || staff.rows[0].display_name,
+    };
+  }
+  const name = String(person?.name || '').trim().slice(0, 120);
+  if (!name) throw new Error('请填写记录员工');
+  return { staffId: null, name };
+}
+
+async function saveParticipants(client, adjustmentId, input, loginStaffId, isNew) {
+  let recordedBy = input.recordedBy;
+  if (!recordedBy && !isNew) {
+    const current = await client.query(
+      `SELECT staff_id, display_name_snapshot AS name
+       FROM adjustment_participants
+       WHERE adjustment_id=$1 AND role='recorded_by'`,
+      [adjustmentId],
+    );
+    recordedBy = current.rows[0]
+      ? { staffId: current.rows[0].staff_id, name: current.rows[0].name }
+      : null;
+  }
+  const recorded = await participantSnapshot(client, recordedBy, loginStaffId);
+  await client.query(
+    `DELETE FROM adjustment_participants
+     WHERE adjustment_id=$1 AND role IN ('recorded_by','handled_by')`,
+    [adjustmentId],
+  );
+  await client.query(
+    `INSERT INTO adjustment_participants
+       (adjustment_id, role, staff_id, display_name_snapshot)
+     VALUES ($1,'recorded_by',$2,$3)`,
+    [adjustmentId, recorded.staffId, recorded.name],
+  );
+  for (const person of input.handledBy) {
+    const handled = await participantSnapshot(client, person);
+    await client.query(
+      `INSERT INTO adjustment_participants
+         (adjustment_id, role, staff_id, display_name_snapshot)
+       VALUES ($1,'handled_by',$2,$3)`,
+      [adjustmentId, handled.staffId, handled.name],
+    );
   }
 }
 
@@ -80,7 +135,7 @@ export async function listAdjustmentOptions() {
        FROM adjustment_reasons ORDER BY position, id`),
     q(`SELECT id, name FROM locations
        WHERE active AND shopify_gid IS NOT NULL ORDER BY name`),
-    q(`SELECT id, shopify_user_id, display_name, role, active
+    q(`SELECT id, shopify_user_id, employee_code, display_name, role, active
        FROM staff ORDER BY active DESC, lower(display_name), id`),
   ]);
   return { reasons: reasons.rows, locations: locations.rows, staff: staff.rows };
@@ -114,6 +169,7 @@ export async function saveAdjustmentDraft({ id = null, input: rawInput, staffId 
   const input = normalizeAdjustmentInput(rawInput);
   return transaction(async (client) => {
     let adjustmentId = Number(id);
+    const isNew = !adjustmentId;
     if (adjustmentId) {
       const existing = await client.query(
         'SELECT id, status FROM adjustments WHERE id=$1 FOR UPDATE',
@@ -123,30 +179,38 @@ export async function saveAdjustmentDraft({ id = null, input: rawInput, staffId 
       if (existing.rows[0].status !== 'draft') throw new Error('只有 Draft 调整单可以编辑');
       await client.query(
         `UPDATE adjustments
-         SET reason_id=$2, staff_id=COALESCE($3, staff_id), notes=$4,
+         SET reason_id=$2, notes=$3,
              apply_error=NULL, updated_at=now()
          WHERE id=$1`,
-        [adjustmentId, input.reasonId, staffId || null, input.notes],
+        [adjustmentId, input.reasonId, input.notes],
       );
       await client.query('DELETE FROM adjustment_lines WHERE adjustment_id=$1', [adjustmentId]);
     } else {
       await client.query(`SELECT pg_advisory_xact_lock(hashtext('inventory-adjustment-number'))`);
       const number = await client.query('SELECT COALESCE(max(number), 0)::int + 1 AS next FROM adjustments');
+      const displayNumber = newAdjustmentDisplayNumber(number.rows[0].next);
       const created = await client.query(
         `INSERT INTO adjustments
-           (number, reason_id, staff_id, notes, status, idempotency_key, updated_at)
-         VALUES ($1,$2,$3,$4,'draft',$5,now())
+           (number, display_number, reason_id, staff_id, created_by_staff_id,
+            notes, status, idempotency_key, updated_at)
+         VALUES ($1,$2,$3,$4,$4,$5,'draft',$6,now())
          RETURNING id`,
-        [number.rows[0].next, input.reasonId, staffId || null, input.notes, idempotencyKey()],
+        [
+          number.rows[0].next, displayNumber, input.reasonId,
+          staffId || null, input.notes, idempotencyKey(),
+        ],
       );
       adjustmentId = created.rows[0].id;
     }
+    await saveParticipants(client, adjustmentId, input, staffId, isNew);
     await validateAndInsertLines(client, adjustmentId, input);
     return adjustmentId;
   });
 }
 
-function adjustmentFilters({ status, reasonId, staffId, term }, params) {
+function adjustmentFilters({
+  status, reasonId, staffId, term, locationId, direction, dateFrom, dateTo,
+}, params) {
   const filters = ['1=1'];
   const add = (value) => {
     params.push(value);
@@ -156,16 +220,56 @@ function adjustmentFilters({ status, reasonId, staffId, term }, params) {
     filters.push(`a.status=${add(status)}`);
   }
   if (Number(reasonId) > 0) filters.push(`a.reason_id=${add(Number(reasonId))}`);
-  if (Number(staffId) > 0) filters.push(`a.staff_id=${add(Number(staffId))}`);
+  if (Number(staffId) > 0) {
+    const p = add(Number(staffId));
+    filters.push(`(a.staff_id=${p} OR a.created_by_staff_id=${p}
+      OR a.applied_by_staff_id=${p} OR EXISTS (
+        SELECT 1 FROM adjustment_participants fp
+        WHERE fp.adjustment_id=a.id AND fp.staff_id=${p}
+      ))`);
+  }
+  if (Number(locationId) > 0) {
+    const p = add(Number(locationId));
+    filters.push(`EXISTS (
+      SELECT 1 FROM adjustment_lines fl
+      WHERE fl.adjustment_id=a.id AND fl.location_id=${p}
+    )`);
+  }
+  if (direction === 'increase') {
+    filters.push(`EXISTS (SELECT 1 FROM adjustment_lines fl
+      WHERE fl.adjustment_id=a.id AND fl.delta > 0)`);
+  } else if (direction === 'decrease') {
+    filters.push(`EXISTS (SELECT 1 FROM adjustment_lines fl
+      WHERE fl.adjustment_id=a.id AND fl.delta < 0)`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(dateFrom || ''))) {
+    filters.push(`a.created_at >= ${add(`${dateFrom}T00:00:00Z`)}::timestamptz`);
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(String(dateTo || ''))) {
+    filters.push(`a.created_at < ${add(`${dateTo}T00:00:00Z`)}::timestamptz + interval '1 day'`);
+  }
   const search = String(term || '').trim().slice(0, 100);
   if (search) {
     const p = add(`%${search}%`);
-    filters.push(`(a.number::text ILIKE ${p} OR a.notes ILIKE ${p} OR EXISTS (
+    filters.push(`(a.number::text ILIKE ${p} OR a.display_number ILIKE ${p}
+      OR a.notes ILIKE ${p}
+      OR EXISTS (
+        SELECT 1 FROM staff fs
+        WHERE fs.id IN (a.staff_id, a.created_by_staff_id, a.applied_by_staff_id)
+          AND (fs.display_name ILIKE ${p} OR fs.employee_code ILIKE ${p}
+               OR fs.shopify_user_id ILIKE ${p})
+      )
+      OR EXISTS (
+        SELECT 1 FROM adjustment_participants fp
+        WHERE fp.adjustment_id=a.id AND fp.display_name_snapshot ILIKE ${p}
+      )
+      OR EXISTS (
       SELECT 1 FROM adjustment_lines fl
       JOIN items fi ON fi.id=fl.item_id
       WHERE fl.adjustment_id=a.id
         AND (fi.barcode ILIKE ${p} OR fi.sku ILIKE ${p}
-             OR fi.product_title ILIKE ${p} OR fi.variant_title ILIKE ${p})
+             OR fi.product_title ILIKE ${p} OR fi.variant_title ILIKE ${p}
+             OR fi.vendor ILIKE ${p})
     ))`);
   }
   return filters.join(' AND ');
@@ -178,18 +282,34 @@ export async function listAdjustments(filters = {}) {
   const where = adjustmentFilters(filters, params);
   const [count, rows] = await Promise.all([
     q(`SELECT count(*)::int total FROM adjustments a WHERE ${where}`, params),
-    q(`SELECT a.id, a.number, a.status, a.notes, a.created_at, a.applied_at,
-              a.apply_error, r.name AS reason, s.display_name AS staff_name,
+    q(`SELECT a.id, a.number, a.display_number, a.status, a.notes,
+              a.created_at, a.applied_at, a.apply_error, r.name AS reason,
+              login.display_name AS login_account_name,
+              created.display_name AS created_by_account_name,
+              applied.display_name AS applied_by_account_name,
+              participants.recorded_by_name, participants.handled_by_names,
               count(al.id)::int AS line_count,
               COALESCE(sum(al.delta), 0)::int AS total_delta,
               string_agg(DISTINCT l.name, ', ' ORDER BY l.name) AS locations
        FROM adjustments a
        LEFT JOIN adjustment_reasons r ON r.id=a.reason_id
-       LEFT JOIN staff s ON s.id=a.staff_id
+       LEFT JOIN staff login ON login.id=a.staff_id
+       LEFT JOIN staff created ON created.id=a.created_by_staff_id
+       LEFT JOIN staff applied ON applied.id=a.applied_by_staff_id
+       LEFT JOIN LATERAL (
+         SELECT
+           max(display_name_snapshot) FILTER (WHERE role='recorded_by') AS recorded_by_name,
+           string_agg(display_name_snapshot, ', ' ORDER BY id)
+             FILTER (WHERE role='handled_by') AS handled_by_names
+         FROM adjustment_participants ap
+         WHERE ap.adjustment_id=a.id
+       ) participants ON true
        LEFT JOIN adjustment_lines al ON al.adjustment_id=a.id
        LEFT JOIN locations l ON l.id=al.location_id
        WHERE ${where}
-       GROUP BY a.id, r.name, s.display_name
+       GROUP BY a.id, r.name, login.display_name, created.display_name,
+                applied.display_name, participants.recorded_by_name,
+                participants.handled_by_names
        ORDER BY a.created_at DESC, a.id DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, pageSize, (page - 1) * pageSize]),
@@ -199,12 +319,17 @@ export async function listAdjustments(filters = {}) {
 
 export async function getAdjustment(id) {
   const adjustmentId = Number(id);
-  const [header, lines, attachments] = await Promise.all([
+  const [header, lines, attachments, participants] = await Promise.all([
     q(`SELECT a.*, r.name AS reason, r.direction,
-              s.display_name AS staff_name, s.shopify_user_id
+              login.display_name AS login_account_name,
+              login.shopify_user_id AS login_shopify_user_id,
+              created.display_name AS created_by_account_name,
+              applied.display_name AS applied_by_account_name
        FROM adjustments a
        LEFT JOIN adjustment_reasons r ON r.id=a.reason_id
-       LEFT JOIN staff s ON s.id=a.staff_id
+       LEFT JOIN staff login ON login.id=a.staff_id
+       LEFT JOIN staff created ON created.id=a.created_by_staff_id
+       LEFT JOIN staff applied ON applied.id=a.applied_by_staff_id
        WHERE a.id=$1`, [adjustmentId]),
     q(`SELECT al.*, i.product_title, i.variant_title, i.barcode, i.sku, i.vendor,
               i.shopify_inventory_item_gid, l.name AS location,
@@ -217,9 +342,21 @@ export async function getAdjustment(id) {
        WHERE al.adjustment_id=$1
        ORDER BY al.id`, [adjustmentId]),
     listAdjustmentAttachments(adjustmentId),
+    q(`SELECT ap.id, ap.role, ap.staff_id, ap.display_name_snapshot AS name
+       FROM adjustment_participants ap
+       WHERE ap.adjustment_id=$1
+       ORDER BY CASE ap.role WHEN 'recorded_by' THEN 0 ELSE 1 END, ap.id`,
+      [adjustmentId]),
   ]);
   if (!header.rowCount) return null;
-  return { ...header.rows[0], lines: lines.rows, attachments };
+  const people = participants.rows;
+  return {
+    ...header.rows[0],
+    recorded_by: people.find((person) => person.role === 'recorded_by') || null,
+    handled_by: people.filter((person) => person.role === 'handled_by'),
+    lines: lines.rows,
+    attachments,
+  };
 }
 
 async function prepareApply(id, shop, applyingStaffId) {
@@ -244,7 +381,12 @@ async function prepareApply(id, shop, applyingStaffId) {
         [applyingStaffId],
       );
       if (!actor.rowCount) throw new Error('当前员工账号不可用于库存调整');
-      await client.query('UPDATE adjustments SET staff_id=$2 WHERE id=$1', [id, applyingStaffId]);
+      await client.query(
+        `UPDATE adjustments
+         SET staff_id=$2, applied_by_staff_id=$2, updated_at=now()
+         WHERE id=$1`,
+        [id, applyingStaffId],
+      );
       adjustment.staff_id = actor.rows[0].id;
       adjustment.shopify_user_id = actor.rows[0].shopify_user_id;
       adjustment.staff_name = actor.rows[0].display_name;
@@ -457,13 +599,29 @@ export async function updateAdjustmentReason(id, input) {
 
 export async function updateStaff(id, input) {
   const displayName = String(input.displayName || '').trim().slice(0, 120);
+  const employeeCode = String(input.employeeCode || '').trim().slice(0, 60) || null;
   if (!displayName) throw new Error('员工名称不能为空');
   const result = await q(
-    `UPDATE staff SET display_name=$2, active=$3 WHERE id=$1
-     RETURNING id, shopify_user_id, display_name, role, active`,
-    [Number(id), displayName, input.active !== false],
+    `UPDATE staff
+     SET display_name=$2, employee_code=$3, active=$4
+     WHERE id=$1
+     RETURNING id, shopify_user_id, employee_code, display_name, role, active`,
+    [Number(id), displayName, employeeCode, input.active !== false],
   );
   if (!result.rowCount) throw new Error('员工不存在');
+  return result.rows[0];
+}
+
+export async function createStaff(input) {
+  const displayName = String(input.displayName || '').trim().slice(0, 120);
+  const employeeCode = String(input.employeeCode || '').trim().slice(0, 60) || null;
+  if (!displayName) throw new Error('员工名称不能为空');
+  const result = await q(
+    `INSERT INTO staff (display_name, employee_code, role, active)
+     VALUES ($1,$2,'member',true)
+     RETURNING id, shopify_user_id, employee_code, display_name, role, active`,
+    [displayName, employeeCode],
+  );
   return result.rows[0];
 }
 
@@ -471,14 +629,24 @@ export async function adjustmentsCsv(filters = {}) {
   const params = [];
   const where = adjustmentFilters(filters, params);
   const result = await q(
-    `SELECT a.number, a.status, a.created_at, a.applied_at,
-            r.name AS reason, s.display_name AS staff_name, a.notes,
+    `SELECT COALESCE(a.display_number, 'ADJ-' || lpad(a.number::text, 5, '0')) AS adjustment_number,
+            a.status, a.created_at, a.applied_at, r.name AS reason,
+            login.display_name AS login_account,
+            participants.recorded_by_name, participants.handled_by_names, a.notes,
             l.name AS location, i.barcode, i.sku, i.vendor,
             i.product_title, i.variant_title,
             al.qty_before, al.delta, al.qty_after
      FROM adjustments a
      LEFT JOIN adjustment_reasons r ON r.id=a.reason_id
-     LEFT JOIN staff s ON s.id=a.staff_id
+     LEFT JOIN staff login ON login.id=a.staff_id
+     LEFT JOIN LATERAL (
+       SELECT
+         max(display_name_snapshot) FILTER (WHERE role='recorded_by') AS recorded_by_name,
+         string_agg(display_name_snapshot, ', ' ORDER BY id)
+           FILTER (WHERE role='handled_by') AS handled_by_names
+       FROM adjustment_participants ap
+       WHERE ap.adjustment_id=a.id
+     ) participants ON true
      JOIN adjustment_lines al ON al.adjustment_id=a.id
      JOIN items i ON i.id=al.item_id
      JOIN locations l ON l.id=al.location_id
@@ -487,17 +655,18 @@ export async function adjustmentsCsv(filters = {}) {
     params,
   );
   const headers = [
-    'Adjustment', 'Status', 'Created at', 'Applied at', 'Reason', 'Staff',
-    'Notes', 'Location', 'Barcode', 'SKU', 'Brand', 'Product', 'Variant',
-    'Before', 'Delta', 'After',
+    'Adjustment', 'Status', 'Created at', 'Applied at', 'Reason',
+    'Shopify account', 'Recorded by', 'Handled by', 'Notes', 'Location',
+    'Barcode', 'SKU', 'Brand', 'Product', 'Variant', 'Before', 'Delta', 'After',
   ];
   return [
     headers.map(csvCell).join(','),
     ...result.rows.map((row) => [
-      row.number, row.status, row.created_at?.toISOString?.() || row.created_at,
+      row.adjustment_number, row.status, row.created_at?.toISOString?.() || row.created_at,
       row.applied_at?.toISOString?.() || row.applied_at, row.reason,
-      row.staff_name, row.notes, row.location, row.barcode, row.sku, row.vendor,
-      row.product_title, row.variant_title, row.qty_before, row.delta, row.qty_after,
+      row.login_account, row.recorded_by_name, row.handled_by_names, row.notes,
+      row.location, row.barcode, row.sku, row.vendor, row.product_title,
+      row.variant_title, row.qty_before, row.delta, row.qty_after,
     ].map(csvCell).join(',')),
   ].join('\r\n');
 }
