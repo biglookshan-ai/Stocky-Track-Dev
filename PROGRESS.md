@@ -16,6 +16,8 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 实时接收注册会强制刷新离线 token、读取当前安装实际 scopes，并在页面精确列出待授权权限，不再只显示失败事件数量
+- 补齐 Fulfillment Webhook 所需 `read_fulfillments`，并将 Order / Fulfillment / Transfer / Shipment topic 映射到各自权限
 - 修复 Shopify 2026-04 不支持 `INVENTORY_TRANSFERS_UPDATED` 导致整批 Webhook 注册中断的问题，改用受支持的 Add/Remove items 事件
 - Webhook 改为逐项注册和核心/扩展分级；单个调拨、运输事件缺少权限或版本不支持时，不再阻断库存核心实时接收
 - webhook 库存变化先即时生成 Pending attribution 可见记录，ShopifyQL 后续原位补齐来源，避免最新记录长期停在旧日期

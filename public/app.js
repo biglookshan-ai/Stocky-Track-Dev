@@ -259,6 +259,12 @@ const backfillPercent = (state) => {
   if (![start, cursor, end].every(Number.isFinite) || end <= start) return null;
   return Math.max(1, Math.min(99, Math.round((end - cursor) / (end - start) * 100)));
 };
+const missingWebhookScopes = (state) => {
+  if (state?.missingScopes?.length) return state.missingScopes;
+  return [...new Set((state?.results || [])
+    .filter((result) => !result.ok && result.requiredScope)
+    .map((result) => result.requiredScope))];
+};
 
 // ---- views ----
 
@@ -277,6 +283,7 @@ async function viewDashboard() {
     : backfill?.error
       ? { text: '历史同步已暂停', className: 'warning' }
       : { text: '自动运行中', className: 'success' };
+  const webhookMissingScopes = missingWebhookScopes(s.webhooksRegistered);
   const hasAttention = s.webhookBacklog > 20 || s.webhookErrors > 0
     || s.pendingAttribution > 100 || s.openAlerts > 0;
   const coverage = s.events.first ? `${new Date(s.events.first).toLocaleDateString('zh-CN')} 至今` : '尚无记录';
@@ -339,7 +346,9 @@ async function viewDashboard() {
             ? s.webhooksRegistered.results?.some((r) => !r.ok)
               ? s.webhooksRegistered.results.some((r) => !r.ok && !r.optional)
                 ? `❌ 核心实时接收注册失败（${s.webhooksRegistered.results.filter((r) => !r.ok && !r.optional).map((r) => esc(r.topic)).join('、')}）`
-                : `⚠️ 核心已注册；${s.webhooksRegistered.results.filter((r) => !r.ok).length} 个扩展事件因权限或版本未注册`
+                : webhookMissingScopes.length
+                  ? `⚠️ 核心已注册；待授权：${webhookMissingScopes.map(esc).join('、')}`
+                  : `⚠️ 核心已注册；${s.webhooksRegistered.results.filter((r) => !r.ok).length} 个扩展事件未注册`
               : `✅ 已注册（${fmtDate(s.webhooksRegistered.at)}）`
             : '未注册'}</span>
       </div>
@@ -388,13 +397,17 @@ async function viewDashboard() {
   };
   $('#btn-sync').onclick = guard(async () => { await api('/setup/sync', { method: 'POST' }); setTimeout(viewDashboard, 1500); });
   $('#btn-webhooks').onclick = guard(async () => {
-    const { results } = await api('/setup/webhooks', { method: 'POST' });
+    const state = await api('/setup/webhooks', { method: 'POST' });
+    const { results } = state;
     const failed = results.filter((r) => !r.ok);
     const coreFailed = failed.filter((r) => !r.optional);
+    const missingScopes = missingWebhookScopes(state);
     if (coreFailed.length) {
       alert(`核心实时接收注册失败：\n${coreFailed.map((f) => f.topic).join('\n')}`);
     } else if (failed.length) {
-      alert(`核心库存实时接收已注册。\n另有 ${failed.length} 个订单、调拨或运输扩展事件因当前权限或 API 版本未注册，不影响库存数量的实时记录。`);
+      alert(`核心库存实时接收已注册。\n${missingScopes.length
+        ? `当前安装缺少扩展权限：\n${missingScopes.join('\n')}\n\n请在 Shopify App 配置中加入这些 scopes、保存后重新打开 App 批准权限，再点击本按钮。`
+        : `另有 ${failed.length} 个扩展事件未注册，不影响库存数量的实时记录。`}`);
     }
     viewDashboard();
   });

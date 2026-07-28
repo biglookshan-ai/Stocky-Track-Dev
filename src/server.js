@@ -3,10 +3,17 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { initDb, q, getState, setState, withLock } from './db.js';
-import { requireSession } from './auth-embedded.js';
+import { getAccessToken, requireSession } from './auth-embedded.js';
 import { graphql, offlineCtx } from './shopify.js';
 import { initialSync } from './catalog.js';
-import { receive as receiveWebhook, processPending, registerAll, listSubscriptions } from './webhooks.js';
+import {
+  listGrantedScopes,
+  listSubscriptions,
+  missingRequiredScopes,
+  processPending,
+  receive as receiveWebhook,
+  registerAll,
+} from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
 import { groupAuditEvents, runHistorySync } from './inventory-history.js';
@@ -293,9 +300,34 @@ api.post('/setup/webhooks', async (req, res) => {
   try {
     const appUrl = process.env.APP_URL
       || `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
-    const results = await registerAll({ shop: req.ctx.shop, token: req.ctx.token }, appUrl);
-    await setState('webhooks_registered', { at: new Date().toISOString(), results });
-    res.json({ results });
+    let token = req.ctx.token;
+    let tokenRefreshError = null;
+    if (!process.env.SHOPIFY_ADMIN_TOKEN) {
+      try {
+        token = await getAccessToken(req.ctx.shop, req.ctx.sessionToken, { force: true });
+      } catch (error) {
+        tokenRefreshError = String(error.message || error).slice(0, 500);
+      }
+    }
+    const ctx = { shop: req.ctx.shop, token };
+    let grantedScopes = null;
+    let scopeCheckError = null;
+    try {
+      grantedScopes = await listGrantedScopes(ctx);
+    } catch (error) {
+      scopeCheckError = String(error.message || error).slice(0, 500);
+    }
+    const results = await registerAll(ctx, appUrl);
+    const state = {
+      at: new Date().toISOString(),
+      results,
+      grantedScopes,
+      missingScopes: grantedScopes ? missingRequiredScopes(grantedScopes) : [],
+      tokenRefreshError,
+      scopeCheckError,
+    };
+    await setState('webhooks_registered', state);
+    res.json(state);
   } catch (e) {
     await setState('webhooks_registered', {
       at: new Date().toISOString(), error: e.message,

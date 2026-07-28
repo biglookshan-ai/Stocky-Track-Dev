@@ -148,30 +148,42 @@ async function handle(topic, p, shopDomain, webhookId) {
 }
 
 // Register all needed subscriptions (idempotent: Shopify de-dupes by topic+url).
+export const REQUIRED_APP_SCOPES = [
+  'read_products',
+  'read_locations',
+  'write_inventory',
+  'read_orders',
+  'read_reports',
+  'read_fulfillments',
+  'read_inventory_transfers',
+  'read_inventory_shipments',
+  'read_inventory_shipments_received_items',
+];
+
 export const WEBHOOK_TOPICS = [
-  { topic: 'INVENTORY_LEVELS_UPDATE', optional: false },
-  { topic: 'INVENTORY_ITEMS_UPDATE', optional: false },
-  { topic: 'PRODUCTS_CREATE', optional: false },
-  { topic: 'PRODUCTS_UPDATE', optional: false },
-  { topic: 'PRODUCTS_DELETE', optional: false },
-  { topic: 'LOCATIONS_CREATE', optional: false },
-  { topic: 'LOCATIONS_UPDATE', optional: false },
-  { topic: 'ORDERS_CREATE', optional: true },
-  { topic: 'ORDERS_UPDATED', optional: true },
-  { topic: 'ORDERS_CANCELLED', optional: true },
-  { topic: 'FULFILLMENTS_CREATE', optional: true },
-  { topic: 'FULFILLMENTS_UPDATE', optional: true },
-  { topic: 'REFUNDS_CREATE', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_ADD_ITEMS', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_REMOVE_ITEMS', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_CANCEL', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_COMPLETE', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_READY_TO_SHIP', optional: true },
-  { topic: 'INVENTORY_TRANSFERS_UPDATE_ITEM_QUANTITIES', optional: true },
-  { topic: 'INVENTORY_SHIPMENTS_CREATE', optional: true },
-  { topic: 'INVENTORY_SHIPMENTS_MARK_IN_TRANSIT', optional: true },
-  { topic: 'INVENTORY_SHIPMENTS_RECEIVE_ITEMS', optional: true },
-  { topic: 'INVENTORY_SHIPMENTS_UPDATE_ITEM_QUANTITIES', optional: true },
+  { topic: 'INVENTORY_LEVELS_UPDATE', optional: false, requiredScope: 'write_inventory' },
+  { topic: 'INVENTORY_ITEMS_UPDATE', optional: false, requiredScope: 'read_products' },
+  { topic: 'PRODUCTS_CREATE', optional: false, requiredScope: 'read_products' },
+  { topic: 'PRODUCTS_UPDATE', optional: false, requiredScope: 'read_products' },
+  { topic: 'PRODUCTS_DELETE', optional: false, requiredScope: 'read_products' },
+  { topic: 'LOCATIONS_CREATE', optional: false, requiredScope: 'read_locations' },
+  { topic: 'LOCATIONS_UPDATE', optional: false, requiredScope: 'read_locations' },
+  { topic: 'ORDERS_CREATE', optional: true, requiredScope: 'read_orders' },
+  { topic: 'ORDERS_UPDATED', optional: true, requiredScope: 'read_orders' },
+  { topic: 'ORDERS_CANCELLED', optional: true, requiredScope: 'read_orders' },
+  { topic: 'FULFILLMENTS_CREATE', optional: true, requiredScope: 'read_fulfillments' },
+  { topic: 'FULFILLMENTS_UPDATE', optional: true, requiredScope: 'read_fulfillments' },
+  { topic: 'REFUNDS_CREATE', optional: true, requiredScope: 'read_orders' },
+  { topic: 'INVENTORY_TRANSFERS_ADD_ITEMS', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_TRANSFERS_REMOVE_ITEMS', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_TRANSFERS_CANCEL', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_TRANSFERS_COMPLETE', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_TRANSFERS_READY_TO_SHIP', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_TRANSFERS_UPDATE_ITEM_QUANTITIES', optional: true, requiredScope: 'read_inventory_transfers' },
+  { topic: 'INVENTORY_SHIPMENTS_CREATE', optional: true, requiredScope: 'read_inventory_shipments' },
+  { topic: 'INVENTORY_SHIPMENTS_MARK_IN_TRANSIT', optional: true, requiredScope: 'read_inventory_shipments' },
+  { topic: 'INVENTORY_SHIPMENTS_RECEIVE_ITEMS', optional: true, requiredScope: 'read_inventory_shipments_received_items' },
+  { topic: 'INVENTORY_SHIPMENTS_UPDATE_ITEM_QUANTITIES', optional: true, requiredScope: 'read_inventory_shipments' },
 ];
 
 export function normalizeAppUrl(value) {
@@ -180,10 +192,24 @@ export function normalizeAppUrl(value) {
   return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
+export function missingRequiredScopes(grantedScopes = []) {
+  const granted = new Set(grantedScopes);
+  return REQUIRED_APP_SCOPES.filter((scope) => !granted.has(scope));
+}
+
+export async function listGrantedScopes(ctx, request = graphql) {
+  const data = await request(ctx, `{
+    currentAppInstallation {
+      accessScopes { handle }
+    }
+  }`);
+  return data.currentAppInstallation.accessScopes.map(({ handle }) => handle).sort();
+}
+
 export async function registerAll(ctx, appUrl, request = graphql) {
   const url = `${normalizeAppUrl(appUrl)}/webhooks`;
   const results = [];
-  for (const { topic, optional } of WEBHOOK_TOPICS) {
+  for (const { topic, optional, requiredScope } of WEBHOOK_TOPICS) {
     try {
       const data = await request(ctx, `
         mutation($topic: WebhookSubscriptionTopic!, $sub: WebhookSubscriptionInput!) {
@@ -195,13 +221,14 @@ export async function registerAll(ctx, appUrl, request = graphql) {
       const errs = data.webhookSubscriptionCreate.userErrors;
       // "already taken" errors mean the subscription exists — fine.
       const ok = !errs.length || errs.every((e) => /taken|exists/i.test(e.message));
-      results.push({ topic, optional, ok, errors: ok ? [] : errs });
+      results.push({ topic, optional, requiredScope, ok, errors: ok ? [] : errs });
     } catch (error) {
       // A version- or scope-specific enrichment topic must never prevent the
       // core inventory subscriptions later in the list from being attempted.
       results.push({
         topic,
         optional,
+        requiredScope,
         ok: false,
         errors: [{ message: String(error.message || error).slice(0, 500) }],
       });

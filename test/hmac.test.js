@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 process.env.SHOPIFY_API_SECRET = 'testsecret';
 const {
   normalizeAppUrl,
+  missingRequiredScopes,
   registerAll,
   verifyHmac,
   WEBHOOK_TOPICS,
@@ -41,6 +42,22 @@ test('webhook topic list only uses supported transfer lifecycle names', () => {
   assert.equal(topics.includes('INVENTORY_TRANSFERS_REMOVE_ITEMS'), true);
 });
 
+test('missingRequiredScopes reports the exact optional inventory permissions', () => {
+  const granted = [
+    'read_products',
+    'read_locations',
+    'write_inventory',
+    'read_orders',
+    'read_reports',
+  ];
+  assert.deepEqual(missingRequiredScopes(granted), [
+    'read_fulfillments',
+    'read_inventory_transfers',
+    'read_inventory_shipments',
+    'read_inventory_shipments_received_items',
+  ]);
+});
+
 test('registerAll isolates one topic failure and continues registering the rest', async () => {
   const attempted = [];
   const request = async (_ctx, _query, variables) => {
@@ -67,6 +84,7 @@ test('registerAll isolates one topic failure and continues registering the rest'
   assert.deepEqual(results.find(({ topic }) => topic === 'INVENTORY_TRANSFERS_ADD_ITEMS'), {
     topic: 'INVENTORY_TRANSFERS_ADD_ITEMS',
     optional: true,
+    requiredScope: 'read_inventory_transfers',
     ok: false,
     errors: [{ message: 'topic unavailable for this shop' }],
   });

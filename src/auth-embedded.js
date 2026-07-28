@@ -36,9 +36,9 @@ export function verifySessionToken(token) {
 }
 
 // Get an offline access token for the shop (cached), via token exchange.
-export async function getAccessToken(shop, sessionToken) {
+export async function getAccessToken(shop, sessionToken, { force = false } = {}) {
   const cached = getToken(shop);
-  if (cached) return cached;
+  if (cached && !force) return cached;
   const res = await fetch(`https://${shop}/admin/oauth/access_token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -82,7 +82,7 @@ export function requireSession() {
       const { shop, payload } = verifySessionToken(sessionToken);
       const token = process.env.SHOPIFY_ADMIN_TOKEN || await getAccessToken(shop, sessionToken);
       const staff = await resolveStaff(payload).catch(() => null);
-      req.ctx = { shop, token, staff };
+      req.ctx = { shop, token, staff, sessionToken };
       next();
     } catch (e) {
       res.status(401).json({ error: String(e.message || e), needsAuth: true });

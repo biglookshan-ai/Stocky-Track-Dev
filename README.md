@@ -42,7 +42,7 @@ Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图�
 ## 部署（Railway）
 
 1. Dev Dashboard 建 app：embedded=true、managed install、Custom distribution → cinegearpro
-   Scopes: `read_products, read_locations, write_inventory, read_orders, read_reports, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
+   Scopes: `read_products, read_locations, write_inventory, read_orders, read_reports, read_fulfillments, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
    如需读取 60 天以前的订单客户信息，再申请 `read_all_orders`。
 2. Railway: 新项目 → Deploy from GitHub → 加 **Postgres** 插件 → 加 **Volume** 挂 `/data`
 3. 环境变量：见 `.env.example`（`APP_URL` 填 Railway 域名；`DATABASE_URL` 由 Railway 注入）

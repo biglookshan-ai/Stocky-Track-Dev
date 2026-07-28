@@ -69,7 +69,7 @@
 
 **Shopify app 配置**（Dev Dashboard 新建，参考 legacy custom app 停用备忘）：
 - embedded: true，managed install，Custom distribution → cinegearpro.myshopify.com
-- Scopes：`read_products, read_locations, write_inventory, read_orders, read_reports, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
+- Scopes：`read_products, read_locations, write_inventory, read_orders, read_reports, read_fulfillments, read_inventory_transfers, read_inventory_shipments, read_inventory_shipments_received_items`
   （write_inventory 隐含 read；read_orders 用于归因销售/退款；read_reports 用于 ShopifyQL 对账；
   transfer/shipment scopes 用于准确解析调拨编号、状态和生命周期。60 天以前订单客户信息另需
   Shopify 批准 `read_all_orders`。）
