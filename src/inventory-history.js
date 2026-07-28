@@ -425,55 +425,57 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
 // the two rows describe the same Shopify operation. Remove only the provisional
 // duplicate; the enriched ShopifyQL event remains the audit source.
 export async function mergeNearbyProvisionalEvents() {
-  const candidates = await q(`
-    SELECT pe.id AS provisional_event_id, canonical.event_id AS canonical_event_id,
-           min(abs(extract(epoch FROM
-             (canonical.occurred_at - provisional.occurred_at)))) AS distance_seconds
-    FROM inventory_events pe
-    JOIN inventory_ledger provisional ON provisional.event_id=pe.id
-    JOIN inventory_ledger canonical
-      ON canonical.event_id <> pe.id
-     AND canonical.attribution='shopifyql'
-     AND canonical.item_id=provisional.item_id
-     AND canonical.location_id=provisional.location_id
-     AND canonical.state=provisional.state
-     AND canonical.delta=provisional.delta
-     AND canonical.occurred_at
-       BETWEEN provisional.occurred_at - interval '30 seconds'
-           AND provisional.occurred_at + interval '30 seconds'
-    WHERE pe.source_type = 'unknown'
-      AND EXISTS (
-        SELECT 1 FROM inventory_ledger p
-        WHERE p.event_id=pe.id AND p.attribution='pending'
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM inventory_ledger p
-        WHERE p.event_id=pe.id
-          AND NOT EXISTS (
-            SELECT 1
-            FROM inventory_ledger c
-            WHERE c.event_id=canonical.event_id
-              AND c.attribution='shopifyql'
-              AND c.item_id=p.item_id
-              AND c.location_id=p.location_id
-              AND c.state=p.state
-              AND c.delta=p.delta
-              AND c.occurred_at
-                BETWEEN p.occurred_at - interval '30 seconds'
-                    AND p.occurred_at + interval '30 seconds'
-          )
-      )
-    GROUP BY pe.id, canonical.event_id
-    ORDER BY pe.id, distance_seconds ASC`);
-  if (!candidates.rowCount) return 0;
-
+  const pendingEvents = await q(`
+    SELECT DISTINCT e.id
+    FROM inventory_events e
+    JOIN inventory_ledger lg ON lg.event_id=e.id
+    WHERE e.source_type='unknown' AND lg.attribution='pending'
+    ORDER BY e.id`);
+  if (!pendingEvents.rowCount) return 0;
   const winners = new Map();
-  for (const row of candidates.rows) {
-    if (!winners.has(row.provisional_event_id)) {
-      winners.set(row.provisional_event_id, row.canonical_event_id);
+  for (const event of pendingEvents.rows) {
+    const provisional = await q(`
+      SELECT item_id, location_id, state, delta, occurred_at
+      FROM inventory_ledger WHERE event_id=$1`,
+    [event.id]);
+    const seed = provisional.rows[0];
+    if (!seed) continue;
+    const candidates = await q(`
+      SELECT DISTINCT event_id
+      FROM inventory_ledger
+      WHERE event_id <> $1
+        AND attribution='shopifyql'
+        AND item_id=$2 AND location_id=$3 AND state=$4 AND delta=$5
+        AND occurred_at BETWEEN $6::timestamptz - interval '30 seconds'
+                            AND $6::timestamptz + interval '30 seconds'
+      LIMIT 20`,
+    [
+      event.id, seed.item_id, seed.location_id, seed.state, seed.delta,
+      seed.occurred_at,
+    ]);
+    if (!candidates.rowCount) continue;
+    const ids = candidates.rows.map((row) => row.event_id);
+    const canonical = await q(`
+      SELECT event_id, item_id, location_id, state, delta, occurred_at
+      FROM inventory_ledger
+      WHERE event_id=ANY($1::bigint[]) AND attribution='shopifyql'`,
+    [ids]);
+    for (const candidateId of ids) {
+      const rows = canonical.rows.filter((row) =>
+        String(row.event_id) === String(candidateId));
+      const fullyCovered = provisional.rows.every((p) => rows.some((c) =>
+        c.item_id === p.item_id
+        && c.location_id === p.location_id
+        && c.state === p.state
+        && c.delta === p.delta
+        && Math.abs(+new Date(c.occurred_at) - +new Date(p.occurred_at)) <= 30000));
+      if (fullyCovered) {
+        winners.set(event.id, candidateId);
+        break;
+      }
     }
   }
+  if (!winners.size) return 0;
 
   const client = await pool.connect();
   let merged = 0;
