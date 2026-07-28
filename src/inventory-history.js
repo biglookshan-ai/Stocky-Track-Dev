@@ -426,15 +426,22 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
 // duplicate; the enriched ShopifyQL event remains the audit source.
 export async function mergeNearbyProvisionalEvents() {
   const candidates = await q(`
-    SELECT pe.id AS provisional_event_id, ce.id AS canonical_event_id
+    SELECT pe.id AS provisional_event_id, canonical.event_id AS canonical_event_id,
+           min(abs(extract(epoch FROM
+             (canonical.occurred_at - provisional.occurred_at)))) AS distance_seconds
     FROM inventory_events pe
-    JOIN inventory_events ce
-      ON ce.id <> pe.id
-     AND ce.source_type <> 'unknown'
-     AND ce.occurred_at BETWEEN pe.occurred_at - interval '30 seconds'
-                            AND pe.occurred_at + interval '30 seconds'
+    JOIN inventory_ledger provisional ON provisional.event_id=pe.id
+    JOIN inventory_ledger canonical
+      ON canonical.event_id <> pe.id
+     AND canonical.attribution='shopifyql'
+     AND canonical.item_id=provisional.item_id
+     AND canonical.location_id=provisional.location_id
+     AND canonical.state=provisional.state
+     AND canonical.delta=provisional.delta
+     AND canonical.occurred_at
+       BETWEEN provisional.occurred_at - interval '30 seconds'
+           AND provisional.occurred_at + interval '30 seconds'
     WHERE pe.source_type = 'unknown'
-      AND pe.shopify_group_gid LIKE 'webhook:%'
       AND EXISTS (
         SELECT 1 FROM inventory_ledger p
         WHERE p.event_id=pe.id AND p.attribution='pending'
@@ -446,16 +453,19 @@ export async function mergeNearbyProvisionalEvents() {
           AND NOT EXISTS (
             SELECT 1
             FROM inventory_ledger c
-            WHERE c.event_id=ce.id
+            WHERE c.event_id=canonical.event_id
+              AND c.attribution='shopifyql'
               AND c.item_id=p.item_id
               AND c.location_id=p.location_id
               AND c.state=p.state
               AND c.delta=p.delta
-              AND (p.qty_after IS NULL OR c.qty_after IS NULL OR c.qty_after=p.qty_after)
+              AND c.occurred_at
+                BETWEEN p.occurred_at - interval '30 seconds'
+                    AND p.occurred_at + interval '30 seconds'
           )
       )
-    ORDER BY pe.id,
-             abs(extract(epoch FROM (ce.occurred_at - pe.occurred_at))) ASC`);
+    GROUP BY pe.id, canonical.event_id
+    ORDER BY pe.id, distance_seconds ASC`);
   if (!candidates.rowCount) return 0;
 
   const winners = new Map();
