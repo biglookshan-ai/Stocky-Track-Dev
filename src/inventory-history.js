@@ -7,6 +7,7 @@ import { q, getState, setState } from './db.js';
 
 const MAX_ROWS = 1000;
 const MIN_SPLIT_MS = 1000;
+const INCREMENTAL_OVERLAP_MS = 30 * 60 * 1000;
 const SHOPIFYQL_PACE_MS = Number(process.env.SHOPIFYQL_PACE_MS || 16000);
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -16,7 +17,7 @@ export function historyWindowDays(incremental) {
 
 export function incrementalHistoryStart({ since, state, requestedStart }) {
   if (!since && state?.mode === 'incremental' && state?.cursor) {
-    return new Date(+new Date(state.cursor) - 120000);
+    return new Date(+new Date(state.cursor) - INCREMENTAL_OVERLAP_MS);
   }
   return requestedStart;
 }
@@ -429,8 +430,10 @@ export async function runHistorySync(ctx, {
 
   const mode = incremental ? 'incremental' : 'backfill';
   const direction = incremental ? 'forward' : 'backward';
-  // Incremental runs overlap two minutes. Backfills run newest-first so the
-  // product screen becomes useful immediately, then continue towards day 180.
+  // Incremental runs overlap thirty minutes because ShopifyQL reporting can
+  // trail the realtime webhook. External change IDs keep this replay idempotent.
+  // Backfills run newest-first so the product screen becomes useful immediately,
+  // then continue towards day 180.
   const incrementalStart = incremental
     ? incrementalHistoryStart({ since, state, requestedStart })
     : requestedStart;
