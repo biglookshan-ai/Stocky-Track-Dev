@@ -437,10 +437,6 @@ export async function mergeNearbyProvisionalEvents() {
         WHERE p.event_id=pe.id AND p.attribution='pending'
       )
       AND NOT EXISTS (
-        SELECT 1 FROM inventory_ledger p
-        WHERE p.event_id=pe.id AND p.attribution <> 'pending'
-      )
-      AND NOT EXISTS (
         SELECT 1
         FROM inventory_ledger p
         WHERE p.event_id=pe.id
@@ -473,7 +469,7 @@ export async function mergeNearbyProvisionalEvents() {
     for (const provisionalEventId of winners.keys()) {
       const removed = await client.query(
         `DELETE FROM inventory_ledger
-         WHERE event_id=$1 AND attribution='pending'`,
+         WHERE event_id=$1`,
         [provisionalEventId],
       );
       if (!removed.rowCount) continue;
