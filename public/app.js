@@ -123,12 +123,17 @@ async function wireAttachmentActions(adjustmentId, attachments = []) {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
+const STATUS_HELP = {
+  completion: '库存数量变化已经保存。系统正在补充操作原因、员工或 App，以及关联的 Order、Transfer 或调整编号；这不代表记录丢失。',
+  discrepancy: '每日库存核对发现本应用推算值与 Shopify 当前值曾不一致。本应用只把本地记录校正到 Shopify 真值，不会修改 Shopify 库存；请确认差异合理后标记已确认。',
+};
+const infoTip = (text) => `<span class="info-tip" tabindex="0" role="note" aria-label="${esc(text)}" data-tooltip="${esc(text)}">?</span>`;
 
 const SOURCE_LABEL = {
   sale: 'Sale', refund: 'Return', adjustment: 'Adjustment', stocktake: 'Stocktake',
   import: 'Historical import', reconciliation: 'Reconciliation', external_app: 'App',
   admin_manual: 'Staff', order: 'Order', transfer: 'Transfer',
-  unknown: 'Pending attribution', bundle_op: 'Bundle',
+  unknown: '库存信息补全中', bundle_op: 'Bundle',
 };
 const srcBadge = (s) => `<span class="badge ${esc(s)}">${SOURCE_LABEL[s] || esc(s)}</span>`;
 const ACTIVITY_LABEL = {
@@ -295,7 +300,7 @@ async function viewDashboard() {
       <a class="stat stat-link" href="#/items"><div class="n">${s.items.n}</div><div class="l">商品 / Barcode</div><div class="hint">查看商品与各仓库存</div></a>
       <a class="stat stat-link" href="#/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
       <a class="stat stat-link" href="#/history"><div class="n range">${coverage}</div><div class="l">已保存的历史范围</div><div class="hint">点击查看历史修改记录</div></a>
-      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${hasAttention ? '需复核' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? `${s.openAlerts} 条对账提醒，点击查看` : '实时记录与对账正常'}</div></a>
+      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${s.openAlerts ? '库存有差异' : hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${s.openAlerts ? `${s.openAlerts} 条库存差异，点击查看` : hasAttention ? '有系统状态需要查看' : '实时记录与库存核对正常'}</div></a>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">系统自动接收 Shopify 修改，并每天核对库存。</p></div>
@@ -325,11 +330,11 @@ async function viewDashboard() {
       <div id="recent-products-pagination" class="pagination"></div>
     </div>
     <details class="card system-details">
-      <summary>系统状态说明 ${hasAttention ? `<span class="badge unknown">${s.openAlerts} 条需复核</span>` : ''}</summary>
+      <summary>系统状态说明 ${s.openAlerts ? `<span class="badge unknown">${s.openAlerts} 条库存差异</span>` : ''}</summary>
       <div class="health-grid">
         <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。处理错误 ${s.webhookErrors || 0} 条；通常两者都应为 0。</p></div>
-        <div><strong>归因处理中：${s.pendingAttribution}</strong><p>数量变化已保存，系统正在匹配对应的订单、员工或 App；不会影响库存记录。</p></div>
-        <div><strong>对账提醒：${s.openAlerts}</strong><p>每日核对发现本地推算与 Shopify 实际值曾不同；数量已自动修正，提醒保留供人工复核。</p></div>
+        <div><strong class="status-label">库存信息补全：${s.pendingAttribution} ${infoTip(STATUS_HELP.completion)}</strong><p>数量变化已保存，正在补充订单、员工、App 和关联编号。</p></div>
+        <div><strong class="status-label">库存有差异：${s.openAlerts} ${infoTip(STATUS_HELP.discrepancy)}</strong><p>本地记录已按 Shopify 真值校正，等待人工确认差异。</p></div>
       </div>
     </details>
     <details class="card system-details">
@@ -361,7 +366,7 @@ async function viewDashboard() {
       <div class="row">
         <button id="btn-history" class="secondary">同步 Shopify 最近 180 天</button>
         <span class="muted">${backfill ? backfill.running ? `⏳ 历史回填中… 已读取 ${backfill.fetched || 0} 行` : backfill.error ? `❌ ${esc(backfill.error)}` : `历史回填完成 ${fmtDate(backfill.finishedAt)}：新增 ${backfill.inserted || 0}` : '尚未回填'}
-        ${history?.finishedAt ? ` · 实时归因 ${fmtDate(history.finishedAt)}` : ''}</span>
+        ${history?.finishedAt ? ` · 信息补全 ${fmtDate(history.finishedAt)}` : ''}</span>
       </div>
       <p class="muted compact">这些工具仅用于安装、恢复或人工复核；日常使用无需点击。</p>
     </details>
@@ -589,15 +594,15 @@ async function viewSystem() {
     return id ? `https://admin.shopify.com/store/${encodeURIComponent(alerts.shopHandle)}/products/${encodeURIComponent(id)}` : null;
   };
   app.innerHTML = `
-    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看同步进度与需要人工复核的库存差异。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
+    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看同步进度、库存信息补全和库存差异。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
-      <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l">归因处理中</div><div class="hint">正在匹配订单、员工或 App</div></div>
-      <div class="stat ${status.openAlerts ? 'warn' : 'ok'}"><div class="n">${status.openAlerts}</div><div class="l">对账提醒</div><div class="hint">数量已自动修正，等待复核</div></div>
+      <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">库存信息补全 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">正在补充订单、员工、App 和关联编号</div></div>
+      <div class="stat ${status.openAlerts ? 'warn' : 'ok'}"><div class="n">${status.openAlerts}</div><div class="l status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</div><div class="hint">本地已按 Shopify 真值校正，等待确认</div></div>
       <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l">180 天历史同步</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>需要复核</h2><p class="muted compact">快照已把本地数量修正到 Shopify 实际值；请确认差异合理，然后标记为已复核。</p></div></div>
+      <div class="card-heading"><div><h2 class="status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</h2><p class="muted compact">本地数量已经校正到 Shopify 实际值；请确认差异合理，然后标记为已确认。</p></div></div>
       <div class="table-scroll"><table><thead><tr><th>商品</th><th>Location</th><th>State</th><th class="num">Expected</th><th class="num">Shopify actual</th><th>Detected</th><th>操作</th></tr></thead>
       <tbody>${alerts.rows.map((row) => {
         const admin = productAdmin(row);
@@ -606,9 +611,9 @@ async function viewSystem() {
           <td class="num">${row.expected ?? '—'}</td><td class="num">${row.actual ?? '—'}</td>
           <td>${fmtDate(row.created_at)}</td><td><div class="button-group">
             ${admin ? `<a class="button secondary small-button" href="${admin}" target="_blank" rel="noopener">Shopify 调整 ↗</a>` : ''}
-            <button class="secondary small-button resolve-alert" data-id="${row.id}">标记已复核</button>
+            <button class="secondary small-button resolve-alert" data-id="${row.id}">标记已确认</button>
           </div></td></tr>`;
-      }).join('') || '<tr><td colspan="7" class="muted">没有需要复核的差异。</td></tr>'}</tbody></table></div>
+      }).join('') || '<tr><td colspan="7" class="muted">当前没有库存差异。</td></tr>'}</tbody></table></div>
     </div>`;
   document.querySelectorAll('.resolve-alert').forEach((button) => {
     button.onclick = async () => {
@@ -643,7 +648,7 @@ async function viewHistory() {
             ${[
               ['sale', 'Sale'], ['refund', 'Return'], ['transfer', 'Transfer'],
               ['adjustment', 'Adjustment'], ['staff', 'Staff'], ['app', 'App'],
-              ['unknown', 'Pending attribution'],
+              ['unknown', '库存信息补全中'],
             ].map(([value, label]) => `<option value="${value}" ${filters.source === value ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
           <input id="history-from" type="date" value="${esc(filters.dateFrom)}" aria-label="开始日期">

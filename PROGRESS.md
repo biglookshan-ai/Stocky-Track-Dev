@@ -16,6 +16,8 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 将用户难懂的「归因处理中 / 对账提醒 / 需要复核」统一改为「库存信息补全 / 库存有差异」，并增加鼠标悬停与键盘聚焦说明
+- 差异说明明确本应用只校正本地记录、不修改 Shopify 库存；确认按钮改为更直观的「标记已确认」
 - 实时接收注册会强制刷新离线 token、读取当前安装实际 scopes，并在页面精确列出待授权权限，不再只显示失败事件数量
 - 补齐 Fulfillment Webhook 所需 `read_fulfillments`，并将 Order / Fulfillment / Transfer / Shipment topic 映射到各自权限
 - 修复 Shopify 2026-04 不支持 `INVENTORY_TRANSFERS_UPDATED` 导致整批 Webhook 注册中断的问题，改用受支持的 Add/Remove items 事件

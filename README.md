@@ -36,7 +36,7 @@ Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图�
 归档及 CSV 导出。
 
 顶栏全局搜索与修改记录筛选可按人员、商品名称、Brand、Barcode、SKU、订单/调拨引用和
-调整编号查询。库存 webhook 到达后会先立即显示为 Pending attribution；ShopifyQL 后续会
+调整编号查询。库存 webhook 到达后会先立即显示为「库存信息补全中」；ShopifyQL 后续会
 在同一账本行补齐真实 Activity、员工/App 和业务单据，不会等几分钟后才首次出现。
 
 ## 部署（Railway）
