@@ -16,7 +16,11 @@ import {
 } from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
-import { groupAuditEvents, runHistorySync } from './inventory-history.js';
+import {
+  groupAuditEvents,
+  mergeNearbyProvisionalEvents,
+  runHistorySync,
+} from './inventory-history.js';
 import {
   adjustmentsCsv,
   applyAdjustment,
@@ -1140,7 +1144,12 @@ app.use('/api', api);
 // SNAPSHOT_HOUR UTC (default 03). Single instance → simple loops + db lock.
 function startScheduler() {
   setInterval(() => processPending().catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
-  setInterval(() => runAttribution().catch((e) => console.error('[sched] attribution:', e.message)), 120000);
+  setInterval(() => runAttribution()
+    .then(() => mergeNearbyProvisionalEvents())
+    .then((merged) => {
+      if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s)`);
+    })
+    .catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {
     withLock('shopify-heavy', 15 * 60 * 1000,
       () => runHistorySync(offlineCtx(), { days: 2 }))
@@ -1182,6 +1191,11 @@ const PORT = process.env.PORT || 3000;
 initDb().then(() => {
   app.listen(PORT, () => console.log(`inventory-app listening on :${PORT}`));
   startScheduler();
+  mergeNearbyProvisionalEvents()
+    .then((merged) => {
+      if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s) at startup`);
+    })
+    .catch((e) => console.error('[history] startup placeholder cleanup:', e.message));
   resumeInterruptedHistory().catch(async (e) => {
     console.error('[history] resume failed:', e.message);
     const state = await getState('inventory_history_backfill').catch(() => ({}));

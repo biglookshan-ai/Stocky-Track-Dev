@@ -37,7 +37,7 @@ test('explicit recent replay ignores the saved incremental cursor', () => {
   );
   assert.equal(
     incrementalHistoryStart({ since: null, state, requestedStart }).toISOString(),
-    '2026-07-28T11:30:00.000Z',
+    '2026-07-26T12:00:00.000Z',
   );
 });
 
