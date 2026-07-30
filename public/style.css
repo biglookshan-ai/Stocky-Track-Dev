@@ -162,7 +162,7 @@ a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: 
 .sales-history-card .card-heading { align-items: flex-start; }
 .sales-range { margin: -3px 0 10px; font-size: 11.5px; }
 .sales-summary-grid {
-  display: grid; grid-template-columns: repeat(6, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px; margin-bottom: 12px;
 }
 .sales-summary-grid > div {
@@ -185,18 +185,23 @@ a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: 
 .sales-chart svg { display: block; width: 100%; height: auto; min-height: 210px; }
 .sales-grid-line { stroke: #e9ebed; stroke-width: 1; }
 .sales-bar { transition: opacity .12s; }
+.sales-bar.ordered { fill: #7651c9; }
 .sales-bar.sold { fill: #2c6ecb; }
+.sales-bar.cancelled { fill: #c15d4f; }
 .sales-bar.returned { fill: #d89b0d; }
 .sales-bar.received { fill: #008060; }
 .sales-period:hover .sales-bar, .sales-period:focus .sales-bar { opacity: .68; }
 .sales-period:focus { outline: none; }
 .sales-legend {
-  position: absolute; top: 0; right: 14px; display: flex; gap: 12px;
+  position: absolute; top: 0; right: 14px; display: flex; gap: 12px; flex-wrap: wrap;
+  justify-content: flex-end;
   color: var(--sub); font-size: 10.5px;
 }
 .sales-legend span { display: inline-flex; align-items: center; gap: 5px; }
 .sales-legend i { width: 8px; height: 8px; border-radius: 2px; }
+.sales-legend i.order { background: #7651c9; }
 .sales-legend i.sale { background: #2c6ecb; }
+.sales-legend i.cancel { background: #c15d4f; }
 .sales-legend i.return { background: #d89b0d; }
 .sales-legend i.receipt { background: #008060; }
 .sales-chart-empty {
@@ -217,12 +222,15 @@ a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: 
   display: inline-flex; padding: 2px 8px; border-radius: 10px;
   font-size: 11px; white-space: nowrap;
 }
+.movement-badge.order { background: #eee8fb; color: #6043a5; }
 .movement-badge.sale { background: #d6e3f5; color: var(--blue); }
+.movement-badge.cancel { background: #f8e5e1; color: #963f34; }
 .movement-badge.return { background: #fdf3d7; color: #8a6500; }
 .movement-badge.receipt { background: #d5ebe2; color: var(--green); }
 .movement-qty { font-weight: 700; }
 .movement-qty.out { color: var(--red); }
 .movement-qty.in { color: var(--green); }
+.movement-qty.demand { color: #6043a5; }
 .location-inventory-list { display: grid; gap: 9px; }
 .location-inventory-card {
   padding: 12px 14px; border: 1px solid var(--border); border-radius: 9px; background: #fff;

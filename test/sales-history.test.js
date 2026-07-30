@@ -13,13 +13,22 @@ const base = {
   source_type: 'order',
 };
 
-test('sales movement classification ignores reservations and manual inventory changes', () => {
-  assert.equal(classifySalesMovement({
+test('sales movement classification separates order reservations and releases', () => {
+  assert.deepEqual(classifySalesMovement({
     ...base,
-    activity: 'purchase',
+    activity: 'purchased',
     on_hand_delta: 0,
     available_delta: -1,
-  }), null);
+  }), { type: 'order', quantity: 1 });
+  assert.deepEqual(classifySalesMovement({
+    ...base,
+    activity: 'order_edited',
+    on_hand_delta: 0,
+    available_delta: 2,
+  }), { type: 'cancel', quantity: 2 });
+});
+
+test('sales movement classification ignores manual inventory changes', () => {
   assert.equal(classifySalesMovement({
     activity: 'manually_adjusted',
     source_type: 'admin_manual',
@@ -60,19 +69,27 @@ test('sales history summarizes business movements and builds complete daily buck
     {
       ...base,
       event_id: 1,
+      occurred_at: '2026-07-19T12:00:00.000Z',
+      activity: 'purchased',
+      on_hand_delta: 0,
+      available_delta: -2,
+    },
+    {
+      ...base,
+      event_id: 2,
       activity: 'order_fulfilled',
       on_hand_delta: -2,
     },
     {
       ...base,
-      event_id: 2,
+      event_id: 3,
       occurred_at: '2026-07-21T12:00:00.000Z',
       activity: 'return_restock',
       source_type: 'refund',
       on_hand_delta: 1,
     },
     {
-      event_id: 3,
+      event_id: 4,
       occurred_at: '2026-07-22T12:00:00.000Z',
       activity: 'purchase_order_received',
       reference_document_type: 'PurchaseOrder',
@@ -85,18 +102,69 @@ test('sales history summarizes business movements and builds complete daily buck
     currentAvailable: 10,
   });
 
+  assert.equal(result.summary.ordered, 2);
   assert.equal(result.summary.sold, 2);
+  assert.equal(result.summary.pending, 0);
+  assert.equal(result.summary.cancelled, 0);
   assert.equal(result.summary.returned, 1);
   assert.equal(result.summary.netSold, 1);
   assert.equal(result.summary.received, 8);
+  assert.equal(result.summary.orderedOrders, 1);
   assert.equal(result.summary.salesOrders, 1);
+  assert.equal(result.summary.pendingOrders, 0);
   assert.equal(result.series.length, 30);
   assert.deepEqual(
     result.series.find((row) => row.period === '2026-07-20'),
-    { period: '2026-07-20', sold: 2, returned: 0, received: 0 },
+    {
+      period: '2026-07-20',
+      ordered: 0,
+      sold: 2,
+      cancelled: 0,
+      returned: 0,
+      received: 0,
+    },
   );
   assert.ok(result.summary.averageWeekly > 0);
   assert.ok(result.summary.coverageDays > 0);
+});
+
+test('sales history derives pending quantities per order without treating them as sales', () => {
+  const result = summarizeSalesHistory([
+    {
+      ...base,
+      event_id: 10,
+      activity: 'purchased',
+      on_hand_delta: 0,
+      available_delta: -3,
+    },
+    {
+      ...base,
+      event_id: 11,
+      activity: 'order_fulfilled',
+      on_hand_delta: -1,
+      available_delta: 0,
+    },
+    {
+      ...base,
+      event_id: 12,
+      activity: 'order_edited',
+      on_hand_delta: 0,
+      available_delta: 1,
+    },
+  ], {
+    from: new Date('2026-07-20T00:00:00.000Z'),
+    to: new Date('2026-07-20T23:59:59.000Z'),
+    bucket: 'day',
+  });
+
+  assert.equal(result.summary.ordered, 3);
+  assert.equal(result.summary.sold, 1);
+  assert.equal(result.summary.cancelled, 1);
+  assert.equal(result.summary.pending, 1);
+  assert.equal(result.summary.orderedOrders, 1);
+  assert.equal(result.summary.salesOrders, 1);
+  assert.equal(result.summary.pendingOrders, 1);
+  assert.equal(result.summary.cancelledOrders, 1);
 });
 
 test('salesHistoryStart supports rolling week through annual periods', () => {

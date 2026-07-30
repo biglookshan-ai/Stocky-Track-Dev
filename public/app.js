@@ -667,7 +667,9 @@ const SALES_RANGE_LABELS = {
   all: '全部记录',
 };
 const MOVEMENT_LABELS = {
+  order: '下单占用',
   sale: '销售出库',
+  cancel: '取消/释放',
   return: '退货入库',
   receipt: '采购入库',
 };
@@ -683,9 +685,15 @@ const salesPeriodLabel = (period) => {
 
 function salesHistoryChart(data) {
   const series = data.series || [];
-  const maxValue = Math.max(0, ...series.flatMap((row) => [row.sold, row.returned, row.received]));
+  const maxValue = Math.max(0, ...series.flatMap((row) => [
+    row.ordered,
+    row.sold,
+    row.cancelled,
+    row.returned,
+    row.received,
+  ]));
   if (!series.length || maxValue === 0) {
-    return `<div class="sales-chart-empty">这个时间段没有可绘制的销售、退货或采购入库数据。</div>`;
+    return `<div class="sales-chart-empty">这个时间段没有可绘制的下单、出货、取消、退货或采购入库数据。</div>`;
   }
   const w = 1000, h = 220, left = 45, right = 18, top = 18, bottom = 42;
   const plotHeight = h - top - bottom;
@@ -696,12 +704,14 @@ function salesHistoryChart(data) {
   const bars = series.map((row, index) => {
     const center = left + groupWidth * (index + .5);
     const values = [
+      ['ordered', row.ordered, center - barWidth * 2.3],
       ['sold', row.sold, center - barWidth * 1.15],
-      ['returned', row.returned, center],
-      ['received', row.received, center + barWidth * 1.15],
+      ['cancelled', row.cancelled, center],
+      ['returned', row.returned, center + barWidth * 1.15],
+      ['received', row.received, center + barWidth * 2.3],
     ];
     return `<g class="sales-period" tabindex="0">
-      <title>${esc(`${row.period} · 销售 ${row.sold} · 退货 ${row.returned} · 采购入库 ${row.received}`)}</title>
+      <title>${esc(`${row.period} · 下单 ${row.ordered} · 出货 ${row.sold} · 取消/释放 ${row.cancelled} · 退货 ${row.returned} · 采购入库 ${row.received}`)}</title>
       ${values.map(([type, value, x]) => {
         const y = Y(value);
         return `<rect class="sales-bar ${type}" x="${(x - barWidth / 2).toFixed(1)}"
@@ -715,11 +725,13 @@ function salesHistoryChart(data) {
 
   return `<div class="sales-chart">
     <div class="sales-legend">
+      <span><i class="order"></i>下单占用</span>
       <span><i class="sale"></i>销售出库</span>
+      <span><i class="cancel"></i>取消/释放</span>
       <span><i class="return"></i>退货入库</span>
       <span><i class="receipt"></i>采购入库</span>
     </div>
-    <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="销售、退货和采购入库趋势">
+    <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="下单、销售出库、取消、退货和采购入库趋势">
       ${yTicks.map((tick) => `<g>
         <line x1="${left}" y1="${Y(tick).toFixed(1)}" x2="${w - right}" y2="${Y(tick).toFixed(1)}" class="sales-grid-line"/>
         <text x="${left - 9}" y="${(Y(tick) + 4).toFixed(1)}" text-anchor="end" class="trend-axis-label">${tick}</text>
@@ -739,19 +751,27 @@ const salesSummary = (data) => {
     ? '—'
     : summary.coverageDays > 999 ? '999+ 天' : `${Math.round(summary.coverageDays)} 天`;
   return `<div class="sales-summary-grid">
-    <div><span>销售出库</span><strong>${compactNumber(summary.sold)}</strong><small>${summary.salesOrders} 个订单</small></div>
-    <div><span>退货入库</span><strong>${compactNumber(summary.returned)}</strong><small>已重新计入 On hand</small></div>
+    <div><span>下单数量</span><strong>${compactNumber(summary.ordered)}</strong><small>${summary.orderedOrders} 个订单已占用库存</small></div>
+    <div><span>已出货销量</span><strong>${compactNumber(summary.sold)}</strong><small>${summary.salesOrders} 个订单已完成出库</small></div>
+    <div><span>待出货 ${infoTip('按同一订单的下单占用 − 已出货 − 已释放推算；只覆盖本应用已采集到的记录。')}</span><strong>${compactNumber(summary.pending)}</strong><small>${summary.pendingOrders} 个订单尚未见完整出库</small></div>
+    <div><span>取消 / 退货</span><strong>${compactNumber(summary.cancelled + summary.returned)}</strong><small>释放 ${summary.cancelled} · 退货入库 ${summary.returned}</small></div>
     <div><span>净销售量</span><strong>${compactNumber(summary.netSold)}</strong><small>销售 − 退货</small></div>
     <div><span>采购入库</span><strong>${compactNumber(summary.received)}</strong><small>不含仓库调拨</small></div>
-    <div><span>周均净销量</span><strong>${compactNumber(summary.averageWeekly, 1)}</strong><small>按所选周期折算</small></div>
+    <div><span>周均已出货</span><strong>${compactNumber(summary.averageWeekly, 1)}</strong><small>按净出货量和所选周期折算</small></div>
     <div><span>预计可售天数 ${infoTip('当前 Available ÷ 所选周期的日均净销量。没有净销量或库存为负时不估算。')}</span><strong>${coverage}</strong><small>当前 Available ${data.currentAvailable ?? '—'}</small></div>
   </div>`;
+};
+
+const movementQuantity = (row) => {
+  if (row.movement_type === 'sale') return `−${esc(row.quantity)}`;
+  if (['cancel', 'return', 'receipt'].includes(row.movement_type)) return `+${esc(row.quantity)}`;
+  return esc(row.quantity);
 };
 
 const salesRows = (data) => data.rows.map((row) => `<tr>
   <td>${fmtDate(row.occurred_at)}</td>
   <td><span class="movement-badge ${esc(row.movement_type)}">${esc(MOVEMENT_LABELS[row.movement_type] || row.movement_type)}</span></td>
-  <td class="num movement-qty ${row.movement_type === 'sale' ? 'out' : 'in'}">${row.movement_type === 'sale' ? '−' : '+'}${esc(row.quantity)}</td>
+  <td class="num movement-qty ${row.movement_type === 'sale' ? 'out' : ['cancel', 'return', 'receipt'].includes(row.movement_type) ? 'in' : 'demand'}">${movementQuantity(row)}</td>
   <td>${esc(row.location)}</td>
   <td>${referenceCell(row, data.shopHandle)}</td>
   <td>${esc(activityLabel(row.activity))}</td>
@@ -766,11 +786,11 @@ function renderSalesHistory(data) {
     ${salesSummary(data)}
     ${salesHistoryChart(data)}
     <div class="sales-method-note">
-      仅统计真实业务流：Order fulfilled 的 On hand 减少算销售，退货重新入库算退货，Purchase order received 算采购入库；下单占用、调拨、人工调整和 App 修正不计入销量。
+      下单数量来自订单导致的 Available 占用；只有 Order fulfilled 导致 On hand 减少才算已出货销量。待出货按同一订单的下单、出货和库存释放记录推算；退货与采购入库单独统计，调拨、人工调整和 App 修正不计入销量。
     </div>
     <div class="table-scroll"><table class="sales-history-table">
       <thead><tr><th>Date</th><th>类型</th><th class="num">数量</th><th>Location</th><th>关联单据 / 客户</th><th>Activity</th></tr></thead>
-      <tbody>${salesRows(data) || '<tr><td colspan="6" class="muted">这个周期暂无销售、退货或采购入库记录。</td></tr>'}</tbody>
+      <tbody>${salesRows(data) || '<tr><td colspan="6" class="muted">这个周期暂无下单、出货、取消、退货或采购入库记录。</td></tr>'}</tbody>
     </table></div>`;
 }
 
@@ -818,7 +838,7 @@ async function viewItem(id) {
     </div>
     <div class="card sales-history-card">
       <div class="card-heading">
-        <div><h2>销售历史</h2><p class="muted compact">查看真实销售出库、退货和采购入库，作为后续补货计划的数据基础。</p></div>
+        <div><h2>销售历史</h2><p class="muted compact">区分下单需求、真实出货、待出货、取消/退货和采购入库，作为后续补货计划的数据基础。</p></div>
         <select id="sales-range" aria-label="销售历史周期">
           ${Object.entries(SALES_RANGE_LABELS).map(([value, label]) => `<option value="${value}" ${value === '30' ? 'selected' : ''}>${label}</option>`).join('')}
         </select>

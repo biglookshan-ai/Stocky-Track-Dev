@@ -36,8 +36,9 @@ export function salesHistoryStart(range, earliestAt, now = new Date()) {
 }
 
 export function classifySalesMovement(row) {
-  const delta = Number(row.on_hand_delta);
-  if (!Number.isFinite(delta) || delta === 0) return null;
+  const onHandDelta = Number(row.on_hand_delta || 0);
+  const availableDelta = Number(row.available_delta || 0);
+  if (!Number.isFinite(onHandDelta) || !Number.isFinite(availableDelta)) return null;
 
   const activity = normalized(row.activity);
   const source = normalized(row.ledger_source_type || row.source_type);
@@ -56,26 +57,39 @@ export function classifySalesMovement(row) {
     || reference.includes('order')
   );
 
-  if (delta < 0 && isOrder && (
+  if (onHandDelta < 0 && isOrder && (
     source === 'sale'
     || activity === 'order_fulfilled'
     || activity.includes('fulfill')
   )) {
-    return { type: 'sale', quantity: Math.abs(delta) };
+    return { type: 'sale', quantity: Math.abs(onHandDelta) };
   }
 
-  if (delta > 0 && isOrder && (
+  if (onHandDelta > 0 && isOrder && (
     source === 'refund'
     || activity === 'return_restock'
     || activity.includes('return')
     || activity.includes('refund')
     || activity.includes('restock')
   )) {
-    return { type: 'return', quantity: delta };
+    return { type: 'return', quantity: onHandDelta };
   }
 
-  if (delta > 0 && !isTransfer && isPurchaseOrder) {
-    return { type: 'receipt', quantity: delta };
+  if (onHandDelta > 0 && !isTransfer && isPurchaseOrder) {
+    return { type: 'receipt', quantity: onHandDelta };
+  }
+
+  // Shopify reserves inventory when an order is placed or edited. These rows
+  // reduce Available without changing On hand, so they represent demand rather
+  // than a completed sale.
+  if (isOrder && onHandDelta === 0 && availableDelta < 0) {
+    return { type: 'order', quantity: Math.abs(availableDelta) };
+  }
+
+  // A positive Available change with no On hand movement releases an order
+  // reservation (cancelled line, removed quantity or other unfulfilment).
+  if (isOrder && onHandDelta === 0 && availableDelta > 0) {
+    return { type: 'cancel', quantity: availableDelta };
   }
 
   return null;
@@ -112,13 +126,22 @@ function buildSeries(movements, from, to, bucket) {
   const byBucket = new Map();
   for (let cursor = bucketStart(from, bucket); cursor <= to; cursor = nextBucket(cursor, bucket)) {
     const key = bucketKey(cursor, bucket);
-    byBucket.set(key, { period: key, sold: 0, returned: 0, received: 0 });
+    byBucket.set(key, {
+      period: key,
+      ordered: 0,
+      sold: 0,
+      cancelled: 0,
+      returned: 0,
+      received: 0,
+    });
   }
   for (const movement of movements) {
     const key = bucketKey(movement.occurred_at, bucket);
     const row = byBucket.get(key);
     if (!row) continue;
+    if (movement.movement_type === 'order') row.ordered += movement.quantity;
     if (movement.movement_type === 'sale') row.sold += movement.quantity;
+    if (movement.movement_type === 'cancel') row.cancelled += movement.quantity;
     if (movement.movement_type === 'return') row.returned += movement.quantity;
     if (movement.movement_type === 'receipt') row.received += movement.quantity;
   }
@@ -143,8 +166,14 @@ export function summarizeSalesHistory(rows, {
     .filter(Boolean)
     .sort((a, b) => +new Date(b.occurred_at) - +new Date(a.occurred_at));
 
+  const ordered = movements
+    .filter((row) => row.movement_type === 'order')
+    .reduce((sum, row) => sum + row.quantity, 0);
   const sold = movements
     .filter((row) => row.movement_type === 'sale')
+    .reduce((sum, row) => sum + row.quantity, 0);
+  const cancelled = movements
+    .filter((row) => row.movement_type === 'cancel')
     .reduce((sum, row) => sum + row.quantity, 0);
   const returned = movements
     .filter((row) => row.movement_type === 'return')
@@ -153,25 +182,60 @@ export function summarizeSalesHistory(rows, {
     .filter((row) => row.movement_type === 'receipt')
     .reduce((sum, row) => sum + row.quantity, 0);
   const netSold = sold - returned;
+  const orderKey = (row) => row.reference_document_uri
+    || row.reference_document_id
+    || `event:${row.event_id}`;
+  const orderLifecycle = new Map();
+  for (const row of movements.filter((movement) =>
+    ['order', 'sale', 'cancel'].includes(movement.movement_type))) {
+    const key = orderKey(row);
+    const lifecycle = orderLifecycle.get(key) || {
+      ordered: 0,
+      sold: 0,
+      cancelled: 0,
+    };
+    if (row.movement_type === 'order') lifecycle.ordered += row.quantity;
+    if (row.movement_type === 'sale') lifecycle.sold += row.quantity;
+    if (row.movement_type === 'cancel') lifecycle.cancelled += row.quantity;
+    orderLifecycle.set(key, lifecycle);
+  }
+  let pending = 0;
+  let pendingOrders = 0;
+  for (const lifecycle of orderLifecycle.values()) {
+    const outstanding = Math.max(0,
+      lifecycle.ordered - lifecycle.sold - lifecycle.cancelled);
+    pending += outstanding;
+    if (outstanding > 0) pendingOrders++;
+  }
   const periodDays = from
     ? Math.max(1, Math.ceil((+new Date(to) - +new Date(from)) / DAY_MS))
     : 1;
   const dailyVelocity = Math.max(0, netSold) / periodDays;
+  const orderedOrders = new Set(movements
+    .filter((row) => row.movement_type === 'order')
+    .map(orderKey)).size;
   const salesOrders = new Set(movements
     .filter((row) => row.movement_type === 'sale')
-    .map((row) => row.reference_document_uri
-      || row.reference_document_id
-      || `event:${row.event_id}`)).size;
+    .map(orderKey)).size;
+  const cancelledOrders = new Set(movements
+    .filter((row) => row.movement_type === 'cancel')
+    .map(orderKey)).size;
   const available = currentAvailable === null || currentAvailable === undefined
     ? null : Number(currentAvailable);
 
   return {
     summary: {
+      ordered,
       sold,
+      pending,
+      cancelled,
       returned,
       netSold,
       received,
+      orderedOrders,
       salesOrders,
+      pendingOrders,
+      cancelledOrders,
       averageWeekly: dailyVelocity * 7,
       coverageDays: dailyVelocity > 0 && available !== null && available >= 0
         ? available / dailyVelocity : null,
