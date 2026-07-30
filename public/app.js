@@ -5,27 +5,33 @@
 const $ = (sel) => document.querySelector(sel);
 const app = $('#app');
 
+const sessionClient = window.InventorySessionClient.create({
+  getToken: async () => {
+    try { return await window.shopify.idToken(); }
+    catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
+  },
+  fetchImpl: window.fetch.bind(window),
+});
+const authenticatedFetch = sessionClient.fetch;
+
 async function api(path, opts = {}) {
-  let token = '';
-  try { token = await window.shopify.idToken(); }
-  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
-  const res = await fetch(`/api${path}`, {
+  const res = await authenticatedFetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...(opts.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
   });
   const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401) throw new Error('Shopify 登录会话暂时无法自动恢复，请稍后再试。');
+    throw new Error(j.error || `HTTP ${res.status}`);
+  }
   return j;
 }
 
 async function apiDownload(path, filename) {
-  let token = '';
-  try { token = await window.shopify.idToken(); }
-  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
-  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await authenticatedFetch(path);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    throw new Error(res.status === 401 ? 'Shopify 登录会话暂时无法自动恢复，请稍后再试。' : body.error || `HTTP ${res.status}`);
   }
   const link = document.createElement('a');
   link.href = URL.createObjectURL(await res.blob());
@@ -35,32 +41,27 @@ async function apiDownload(path, filename) {
 }
 
 async function apiBlob(path) {
-  let token = '';
-  try { token = await window.shopify.idToken(); }
-  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
-  const res = await fetch(`/api${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await authenticatedFetch(path);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
+    throw new Error(res.status === 401 ? 'Shopify 登录会话暂时无法自动恢复，请稍后再试。' : body.error || `HTTP ${res.status}`);
   }
   return res.blob();
 }
 
 async function apiUploadAttachment(adjustmentId, file) {
-  let token = '';
-  try { token = await window.shopify.idToken(); }
-  catch { throw new Error('请从 Shopify 后台打开本应用（App Bridge 未初始化）'); }
-  const res = await fetch(`/api/adjustments/${adjustmentId}/attachments`, {
+  const res = await authenticatedFetch(`/adjustments/${adjustmentId}/attachments`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${token}`,
       'Content-Type': file.type || 'application/octet-stream',
       'X-File-Name': encodeURIComponent(file.name),
     },
     body: file,
   });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    throw new Error(res.status === 401 ? 'Shopify 登录会话暂时无法自动恢复，请稍后再试。' : body.error || `HTTP ${res.status}`);
+  }
   return body.attachment;
 }
 

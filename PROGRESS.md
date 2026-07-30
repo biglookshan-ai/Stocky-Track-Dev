@@ -2,7 +2,7 @@
 
 - **状态**: 开发中 · 商品库存详情进入验收
 - **进度**: 94%
-- **一句话**: 商品详情已改用可切换仓位、库存状态和时间范围的真实阶梯趋势，并清晰拆分各仓可售、在手、不可售与在途库存。
+- **一句话**: 嵌入式页面现在会在 Shopify session token 过期时自动换取新令牌并重试，无需手动刷新页面。
 - **分类**: Shopify App
 
 ## 🔨 进行中
@@ -20,6 +20,8 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- 所有前台 API、CSV 下载、附件预览与附件上传统一加入 session token 自动刷新；401 最多安全重试两次，并发请求共享同一次刷新，避免页面停留后出现 `session token expired`
+- 新增过期令牌恢复、并发刷新去重和重试上限测试
 - 商品详情库存区重构：四项总库存概览、各仓状态卡、Unavailable 组成说明，以及可切换 Available / On hand / Committed / Incoming、仓位和时间范围的动态阶梯趋势
 - 趋势数据改由当前 Shopify 数量结合 append-only 修改记录反向重建；无历史时明确显示空状态，不再用稀疏快照绘制误导性的斜线
 - 离线 Shopify token 改为使用 App Secret 加密后持久化到 Postgres；Railway 换容器后后台 Webhook、历史增量与每日核对可立即恢复
