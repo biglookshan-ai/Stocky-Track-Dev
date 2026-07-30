@@ -47,6 +47,11 @@ import {
   TREND_STATES,
   trendStart,
 } from './inventory-trend.js';
+import {
+  SALES_RANGES,
+  salesHistoryStart,
+  summarizeSalesHistory,
+} from './sales-history.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -830,6 +835,87 @@ api.get('/items/:id/trend', async (req, res) => {
         to: now,
         hasHistory: Boolean(earliestAt),
       }),
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Product sales history deliberately uses On hand movements rather than every
+// inventory event. Order reservations only change Available and are not sales;
+// internal transfers and manual adjustments are excluded from replenishment.
+api.get('/items/:id/sales', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid item id' });
+
+    const range = SALES_RANGES.has(String(req.query.range)) ? String(req.query.range) : '30';
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = Math.min(50, Math.max(10, Number(req.query.limit || 20)));
+    const now = new Date();
+    const [earliestResult, currentResult] = await Promise.all([
+      q(`SELECT min(e.occurred_at) AS earliest
+         FROM inventory_events e
+         JOIN inventory_ledger lg ON lg.event_id=e.id
+         WHERE lg.item_id=$1`, [id]),
+      q(`SELECT sum(available)::int AS available
+         FROM current_levels
+         WHERE item_id=$1`, [id]),
+    ]);
+    const earliestAt = earliestResult.rows[0]?.earliest || null;
+    const from = salesHistoryStart(range, earliestAt, now);
+    let rawRows = [];
+    if (from) {
+      const movements = await q(`
+        SELECT e.id AS event_id, e.occurred_at, e.activity, e.reason,
+               e.source_type, e.staff_name, e.app_name,
+               e.reference_document_uri, e.reference_document_type,
+               e.reference_document_id, loc.id AS location_id, loc.name AS location,
+               sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
+               sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
+               max(lg.source_type) AS ledger_source_type
+        FROM inventory_events e
+        JOIN inventory_ledger lg ON lg.event_id=e.id
+        JOIN locations loc ON loc.id=lg.location_id
+        WHERE lg.item_id=$1 AND e.occurred_at >= $2
+        GROUP BY e.id, loc.id, loc.name
+        ORDER BY e.occurred_at DESC, e.id DESC, loc.id`, [id, from.toISOString()]);
+      rawRows = movements.rows;
+    }
+
+    const config = SALES_RANGES.get(range);
+    const currentAvailable = currentResult.rows[0]?.available ?? null;
+    const result = summarizeSalesHistory(rawRows, {
+      from,
+      to: now,
+      bucket: config.bucket,
+      currentAvailable,
+    });
+    const total = result.movements.length;
+    const selected = result.movements.slice((page - 1) * pageSize, page * pageSize);
+    const rows = await enrichReferences(
+      { shop: req.ctx.shop, token: req.ctx.token },
+      selected,
+    );
+    const businessFirst = result.movements.length
+      ? result.movements.at(-1).occurred_at : null;
+    const businessLast = result.movements.length
+      ? result.movements[0].occurred_at : null;
+
+    res.json({
+      range,
+      rangeLabel: config.label,
+      bucket: config.bucket,
+      from: from?.toISOString() || null,
+      to: now.toISOString(),
+      first: businessFirst,
+      last: businessLast,
+      currentAvailable,
+      summary: result.summary,
+      series: result.series,
+      rows,
+      page,
+      pageSize,
+      total,
+      shopHandle: req.ctx.shop.replace(/\.myshopify\.com$/i, ''),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

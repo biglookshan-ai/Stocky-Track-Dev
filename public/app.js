@@ -658,6 +658,122 @@ function wireTrendChart() {
   });
 }
 
+const SALES_RANGE_LABELS = {
+  7: '最近 7 天',
+  30: '最近 30 天',
+  90: '最近 3 个月',
+  180: '最近半年',
+  365: '最近一年',
+  all: '全部记录',
+};
+const MOVEMENT_LABELS = {
+  sale: '销售出库',
+  return: '退货入库',
+  receipt: '采购入库',
+};
+const compactNumber = (value, digits = 0) => Number(value || 0).toLocaleString('zh-CN', {
+  minimumFractionDigits: digits,
+  maximumFractionDigits: digits,
+});
+const salesPeriodLabel = (period) => {
+  if (/^\d{4}-\d{2}$/.test(period)) return `${Number(period.slice(5))}月`;
+  const date = new Date(`${period}T00:00:00.000Z`);
+  return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`;
+};
+
+function salesHistoryChart(data) {
+  const series = data.series || [];
+  const maxValue = Math.max(0, ...series.flatMap((row) => [row.sold, row.returned, row.received]));
+  if (!series.length || maxValue === 0) {
+    return `<div class="sales-chart-empty">这个时间段没有可绘制的销售、退货或采购入库数据。</div>`;
+  }
+  const w = 1000, h = 220, left = 45, right = 18, top = 18, bottom = 42;
+  const plotHeight = h - top - bottom;
+  const plotWidth = w - left - right;
+  const groupWidth = plotWidth / series.length;
+  const barWidth = Math.max(2.5, Math.min(11, groupWidth * .22));
+  const Y = (value) => top + plotHeight * (1 - value / maxValue);
+  const bars = series.map((row, index) => {
+    const center = left + groupWidth * (index + .5);
+    const values = [
+      ['sold', row.sold, center - barWidth * 1.15],
+      ['returned', row.returned, center],
+      ['received', row.received, center + barWidth * 1.15],
+    ];
+    return `<g class="sales-period" tabindex="0">
+      <title>${esc(`${row.period} · 销售 ${row.sold} · 退货 ${row.returned} · 采购入库 ${row.received}`)}</title>
+      ${values.map(([type, value, x]) => {
+        const y = Y(value);
+        return `<rect class="sales-bar ${type}" x="${(x - barWidth / 2).toFixed(1)}"
+          y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}"
+          height="${Math.max(0, top + plotHeight - y).toFixed(1)}" rx="1.5"/>`;
+      }).join('')}
+    </g>`;
+  }).join('');
+  const tickIndexes = [...new Set([0, Math.floor((series.length - 1) / 2), series.length - 1])];
+  const yTicks = [...new Set([0, Math.ceil(maxValue / 2), Math.ceil(maxValue)])];
+
+  return `<div class="sales-chart">
+    <div class="sales-legend">
+      <span><i class="sale"></i>销售出库</span>
+      <span><i class="return"></i>退货入库</span>
+      <span><i class="receipt"></i>采购入库</span>
+    </div>
+    <svg viewBox="0 0 ${w} ${h}" role="img" aria-label="销售、退货和采购入库趋势">
+      ${yTicks.map((tick) => `<g>
+        <line x1="${left}" y1="${Y(tick).toFixed(1)}" x2="${w - right}" y2="${Y(tick).toFixed(1)}" class="sales-grid-line"/>
+        <text x="${left - 9}" y="${(Y(tick) + 4).toFixed(1)}" text-anchor="end" class="trend-axis-label">${tick}</text>
+      </g>`).join('')}
+      ${bars}
+      ${tickIndexes.map((index) => {
+        const x = left + groupWidth * (index + .5);
+        return `<text x="${x.toFixed(1)}" y="${h - 14}" text-anchor="middle" class="trend-axis-label">${esc(salesPeriodLabel(series[index].period))}</text>`;
+      }).join('')}
+    </svg>
+  </div>`;
+}
+
+const salesSummary = (data) => {
+  const summary = data.summary;
+  const coverage = summary.coverageDays === null
+    ? '—'
+    : summary.coverageDays > 999 ? '999+ 天' : `${Math.round(summary.coverageDays)} 天`;
+  return `<div class="sales-summary-grid">
+    <div><span>销售出库</span><strong>${compactNumber(summary.sold)}</strong><small>${summary.salesOrders} 个订单</small></div>
+    <div><span>退货入库</span><strong>${compactNumber(summary.returned)}</strong><small>已重新计入 On hand</small></div>
+    <div><span>净销售量</span><strong>${compactNumber(summary.netSold)}</strong><small>销售 − 退货</small></div>
+    <div><span>采购入库</span><strong>${compactNumber(summary.received)}</strong><small>不含仓库调拨</small></div>
+    <div><span>周均净销量</span><strong>${compactNumber(summary.averageWeekly, 1)}</strong><small>按所选周期折算</small></div>
+    <div><span>预计可售天数 ${infoTip('当前 Available ÷ 所选周期的日均净销量。没有净销量或库存为负时不估算。')}</span><strong>${coverage}</strong><small>当前 Available ${data.currentAvailable ?? '—'}</small></div>
+  </div>`;
+};
+
+const salesRows = (data) => data.rows.map((row) => `<tr>
+  <td>${fmtDate(row.occurred_at)}</td>
+  <td><span class="movement-badge ${esc(row.movement_type)}">${esc(MOVEMENT_LABELS[row.movement_type] || row.movement_type)}</span></td>
+  <td class="num movement-qty ${row.movement_type === 'sale' ? 'out' : 'in'}">${row.movement_type === 'sale' ? '−' : '+'}${esc(row.quantity)}</td>
+  <td>${esc(row.location)}</td>
+  <td>${referenceCell(row, data.shopHandle)}</td>
+  <td>${esc(activityLabel(row.activity))}</td>
+</tr>`).join('');
+
+function renderSalesHistory(data) {
+  const rangeText = data.first
+    ? `${data.rangeLabel} · ${fmtDate(data.first)} 至 ${fmtDate(data.last)}`
+    : `${data.rangeLabel} · 暂无销售业务记录`;
+  return `
+    <p class="sales-range muted">${esc(rangeText)}</p>
+    ${salesSummary(data)}
+    ${salesHistoryChart(data)}
+    <div class="sales-method-note">
+      仅统计真实业务流：Order fulfilled 的 On hand 减少算销售，退货重新入库算退货，Purchase order received 算采购入库；下单占用、调拨、人工调整和 App 修正不计入销量。
+    </div>
+    <div class="table-scroll"><table class="sales-history-table">
+      <thead><tr><th>Date</th><th>类型</th><th class="num">数量</th><th>Location</th><th>关联单据 / 客户</th><th>Activity</th></tr></thead>
+      <tbody>${salesRows(data) || '<tr><td colspan="6" class="muted">这个周期暂无销售、退货或采购入库记录。</td></tr>'}</tbody>
+    </table></div>`;
+}
+
 async function viewItem(id) {
   app.innerHTML = '<div class="card">加载中…</div>';
   const { item, levels, shopHandle, links, lastChange } = await api(`/items/${id}`);
@@ -700,6 +816,16 @@ async function viewItem(id) {
       </div>
       <div id="inventory-trend"><div class="trend-loading">正在读取库存趋势…</div></div>
     </div>
+    <div class="card sales-history-card">
+      <div class="card-heading">
+        <div><h2>销售历史</h2><p class="muted compact">查看真实销售出库、退货和采购入库，作为后续补货计划的数据基础。</p></div>
+        <select id="sales-range" aria-label="销售历史周期">
+          ${Object.entries(SALES_RANGE_LABELS).map(([value, label]) => `<option value="${value}" ${value === '30' ? 'selected' : ''}>${label}</option>`).join('')}
+        </select>
+      </div>
+      <div id="sales-history"><div class="trend-loading">正在计算销售历史…</div></div>
+      <div id="sales-pagination" class="pagination"></div>
+    </div>
     <div class="card">
       <div class="card-heading"><div><h2>各仓库存状态</h2><p class="muted compact">Unavailable 是不可售总量，Committed 等状态属于其明细，不重复相加。</p></div></div>
       <div class="location-inventory-list">${levels.map(locationCard).join('') || '<div class="trend-empty">Shopify 尚未提供仓位库存。</div>'}</div>
@@ -736,6 +862,31 @@ async function viewItem(id) {
   $('#trend-range').onchange = loadTrend;
   loadTrend();
 
+  let salesPage = 1;
+  const loadSales = async () => {
+    const params = new URLSearchParams({
+      range: $('#sales-range').value,
+      page: String(salesPage),
+      limit: '20',
+    });
+    $('#sales-history').innerHTML = '<div class="trend-loading">正在计算销售历史…</div>';
+    $('#sales-pagination').innerHTML = '';
+    try {
+      const result = await api(`/items/${id}/sales?${params}`);
+      $('#sales-history').innerHTML = renderSalesHistory(result);
+      const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
+      $('#sales-pagination').innerHTML = result.total > result.pageSize ? `
+        <button id="sales-prev" class="secondary" ${salesPage <= 1 ? 'disabled' : ''}>上一页</button>
+        <span>第 ${salesPage} / ${pages} 页</span>
+        <button id="sales-next" class="secondary" ${salesPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
+      if ($('#sales-prev')) $('#sales-prev').onclick = () => { salesPage--; loadSales(); };
+      if ($('#sales-next')) $('#sales-next').onclick = () => { salesPage++; loadSales(); };
+    } catch (error) {
+      $('#sales-history').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
+    }
+  };
+  $('#sales-range').onchange = () => { salesPage = 1; loadSales(); };
+
   let historyPage = 1;
   const loadHistory = async () => {
     const location = $('#history-location').value;
@@ -755,7 +906,7 @@ async function viewItem(id) {
     if ($('#history-next')) $('#history-next').onclick = () => { historyPage++; loadHistory(); };
   };
   $('#history-location').onchange = () => { historyPage = 1; loadHistory(); };
-  await loadHistory();
+  await Promise.all([loadSales(), loadHistory()]);
 }
 
 async function viewSystem() {

@@ -12,6 +12,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/ledger.js` — 账本写入（append-only）+ current_levels 基线
 - `src/attribution.js` — 待归因流水 ↔ 订单/退款匹配
 - `src/inventory-history.js` — ShopifyQL 调整历史同步；员工/App/原因/引用/库存状态归并
+- `src/sales-history.js` — 商品真实销售/退货/采购入库分类、周期统计与补货基础指标
 - `src/references.js` — Order / Transfer 编号、客户、状态与 Shopify Admin 链接解析及缓存
 - `src/snapshot.js` — 每日全量拉取 = 快照 + 漂移对账自愈
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
@@ -38,6 +39,11 @@ Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图�
 顶栏全局搜索与修改记录筛选可按人员、商品名称、Brand、Barcode、SKU、订单/调拨引用和
 调整编号查询。库存 webhook 到达后会先立即显示为「库存信息补全中」；ShopifyQL 后续会
 在同一账本行补齐真实 Activity、员工/App 和业务单据，不会等几分钟后才首次出现。
+
+商品详情的「销售历史」按最近 7 天、30 天、3 个月、半年、一年或全部记录统计。销量只取
+`Order fulfilled` 导致的 On hand 减少，退货取重新入库的订单事件，采购入库只取
+`Purchase order received`；下单占用、内部调拨、人工调整和 App 修正均不计入销量。
+面板同时显示净销售量、周均净销量、预计可售天数、周期图表和关联订单/客户明细。
 
 ## 部署（Railway）
 
