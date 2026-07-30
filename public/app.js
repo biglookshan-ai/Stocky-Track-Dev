@@ -608,7 +608,9 @@ function inventoryTrendChart(data) {
       aria-label="${esc(`${fmtDate(point.at)}，${metric.label} ${point.value}`)}"
       data-x="${(x / w * 100).toFixed(2)}" data-y="${(y / h * 100).toFixed(2)}"
       data-date="${esc(fmtDate(point.at))}" data-value="${esc(point.value)}"
-      data-delta="${point.delta === null || point.delta === undefined ? '' : esc(point.delta)}">
+      data-delta="${point.delta === null || point.delta === undefined ? '' : esc(point.delta)}"
+      data-activity="${point.activity ? esc(activityLabel(point.activity)) : ''}"
+      data-location="${point.location ? esc(point.location) : ''}">
       <circle class="trend-dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5"/>
       <circle class="trend-hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="14"/>
     </g>`;
@@ -631,7 +633,7 @@ function inventoryTrendChart(data) {
       ${xTicks.map((time, index) => `<text x="${X(time).toFixed(1)}" y="${h - 16}" text-anchor="${index === 0 ? 'start' : index === 2 ? 'end' : 'middle'}" class="trend-axis-label">${esc(shortDay(time))}</text>`).join('')}
     </svg>
     <div class="trend-tooltip" role="status"></div>
-    <div class="trend-caption"><span>阶梯线表示库存只在操作发生时改变</span><span>${esc(CHART_RANGES[data.range] || '')} · 截至 ${fmtDate(data.to)}</span></div>
+    <div class="trend-caption"><span>每个圆点代表一次库存操作；阶梯线仅在操作发生时改变</span><span>${esc(CHART_RANGES[data.range] || '')} · 截至 ${fmtDate(data.to)}</span></div>
   </div>`;
 }
 
@@ -643,7 +645,8 @@ function wireTrendChart() {
   wrap.querySelectorAll('.trend-point').forEach((point) => {
     const show = () => {
       const delta = point.dataset.delta;
-      tooltip.innerHTML = `<strong>${esc(point.dataset.value)}</strong><span>${esc(point.dataset.date)}${delta ? ` · 变动 ${signed(delta)}` : ' · 当前库存'}</span>`;
+      const context = [point.dataset.activity, point.dataset.location].filter(Boolean).join(' · ');
+      tooltip.innerHTML = `<strong>${esc(point.dataset.value)}</strong><span>${esc(point.dataset.date)}${delta ? ` · 变动 ${signed(delta)}` : ' · 当前库存'}</span>${context ? `<span>${esc(context)}</span>` : ''}`;
       tooltip.style.left = `${Math.max(8, Math.min(92, Number(point.dataset.x)))}%`;
       tooltip.style.top = `${Math.max(14, Number(point.dataset.y))}%`;
       tooltip.classList.add('visible');
@@ -681,7 +684,7 @@ async function viewItem(id) {
     </div>
     <div class="card inventory-trend-card">
       <div class="card-heading">
-        <div><h2>库存趋势</h2><p class="muted compact">根据已保存的修改记录反推每日库存；使用阶梯线，不把离散操作显示成连续下降。</p></div>
+        <div><h2>库存趋势</h2><p class="muted compact">根据已保存的修改记录逐次反推库存；每次操作独立显示，不会把同一天的增减提前抵消。</p></div>
         <div class="trend-controls">
           <select id="trend-state" aria-label="库存状态">
             ${Object.entries(TREND_METRICS).map(([value, meta]) => `<option value="${value}">${meta.label}</option>`).join('')}

@@ -146,7 +146,7 @@ a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: 
 .trend-point:focus { outline: none; }
 .trend-point:focus .trend-dot, .trend-point:hover .trend-dot { fill: var(--green); r: 5; }
 .trend-tooltip {
-  position: absolute; z-index: 4; display: flex; min-width: 132px; padding: 8px 10px;
+  position: absolute; z-index: 4; display: flex; min-width: 160px; padding: 8px 10px;
   flex-direction: column; border: 1px solid #c9cdd1; border-radius: 8px;
   background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.13); opacity: 0;
   visibility: hidden; pointer-events: none; transform: translate(-50%, calc(-100% - 12px));

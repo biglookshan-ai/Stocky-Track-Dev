@@ -766,6 +766,7 @@ api.get('/items/:id/trend', async (req, res) => {
       return res.status(400).json({ error: 'invalid location id' });
     }
     const locationClause = locationId ? ' AND location_id=$3' : '';
+    const ledgerLocationClause = locationId ? ' AND lg.location_id=$3' : '';
     const baseArgs = locationId ? [id, state, locationId] : [id, state];
 
     const [currentResult, earliestResult, locationResult] = await Promise.all([
@@ -792,13 +793,26 @@ api.get('/items/:id/trend', async (req, res) => {
         : [id, state, from.toISOString()];
       const fromParam = locationId ? '$4' : '$3';
       const result = await q(`
-        SELECT to_char((occurred_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS day,
-               sum(delta)::int AS delta
-        FROM inventory_ledger
-        WHERE item_id=$1 AND state=$2${locationClause}
-          AND occurred_at >= ${fromParam}
-        GROUP BY (occurred_at AT TIME ZONE 'UTC')::date
-        ORDER BY (occurred_at AT TIME ZONE 'UTC')::date`, deltaArgs);
+        WITH changes AS (
+          SELECT
+            COALESCE(lg.event_id::text, 'ledger:' || lg.id::text) AS group_key,
+            COALESCE(ev.occurred_at, lg.occurred_at) AS occurred_at,
+            lg.delta,
+            COALESCE(ev.activity, 'inventory_updated') AS activity,
+            loc.name AS location
+          FROM inventory_ledger lg
+          LEFT JOIN inventory_events ev ON ev.id=lg.event_id
+          JOIN locations loc ON loc.id=lg.location_id
+          WHERE lg.item_id=$1 AND lg.state=$2${ledgerLocationClause}
+            AND lg.occurred_at >= ${fromParam}
+        )
+        SELECT min(occurred_at) AS at,
+               sum(delta)::int AS delta,
+               max(activity) AS activity,
+               string_agg(DISTINCT location, ', ' ORDER BY location) AS location
+        FROM changes
+        GROUP BY group_key
+        ORDER BY min(occurred_at), group_key`, deltaArgs);
       deltas = result.rows;
     }
 

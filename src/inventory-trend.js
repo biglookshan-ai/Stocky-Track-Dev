@@ -7,12 +7,6 @@ const dayStart = (value) => {
   return date;
 };
 
-const dayEnd = (value) => {
-  const date = new Date(value);
-  date.setUTCHours(23, 59, 59, 999);
-  return date;
-};
-
 export function trendStart(range, earliestAt, now = new Date()) {
   if (range === 'all') return earliestAt ? dayStart(earliestAt) : null;
   const days = Number(range);
@@ -34,10 +28,12 @@ export function buildInventoryTrend({
 
   const changes = deltas
     .map((row) => ({
-      date: String(row.day).slice(0, 10),
+      at: new Date(row.at).toISOString(),
       delta: Number(row.delta || 0),
+      activity: row.activity || 'inventory_updated',
+      location: row.location || '',
     }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+    .sort((a, b) => +new Date(a.at) - +new Date(b.at));
   const totalDelta = changes.reduce((sum, row) => sum + row.delta, 0);
   let value = Number(current) - totalDelta;
   const points = [{
@@ -50,10 +46,12 @@ export function buildInventoryTrend({
   for (const change of changes) {
     value += change.delta;
     points.push({
-      at: dayEnd(`${change.date}T00:00:00.000Z`).toISOString(),
+      at: change.at,
       value,
       delta: change.delta,
       kind: 'change',
+      activity: change.activity,
+      location: change.location,
     });
   }
 
