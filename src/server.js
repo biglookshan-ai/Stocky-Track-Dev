@@ -41,6 +41,12 @@ import {
   getAdjustmentAttachment,
   storeAdjustmentAttachment,
 } from './adjustment-attachments.js';
+import {
+  buildInventoryTrend,
+  TREND_RANGES,
+  TREND_STATES,
+  trendStart,
+} from './inventory-trend.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -695,16 +701,14 @@ api.get('/items/:id', async (req, res) => {
     const item = await q('SELECT * FROM items WHERE id = $1', [id]);
     if (!item.rowCount) return res.status(404).json({ error: 'not found' });
     const productGid = item.rows[0].shopify_product_gid;
-    const [levels, series, lastChange, productMeta] = await Promise.all([
-      q(`SELECT l.name, cl.available, cl.on_hand, cl.committed, cl.incoming,
+    const [levels, lastChange, productMeta] = await Promise.all([
+      q(`SELECT l.id AS location_id, l.name, cl.available, cl.on_hand, cl.committed, cl.incoming,
                 cl.reserved, cl.damaged, cl.safety_stock, cl.quality_control,
                 CASE WHEN cl.on_hand IS NULL OR cl.available IS NULL THEN NULL
                      ELSE cl.on_hand - cl.available END AS unavailable,
                 cl.updated_at
          FROM current_levels cl JOIN locations l ON l.id = cl.location_id
          WHERE cl.item_id = $1 ORDER BY l.name`, [id]),
-      q(`SELECT snap_date, SUM(available)::int available
-         FROM daily_snapshots WHERE item_id = $1 GROUP BY snap_date ORDER BY snap_date`, [id]),
       q(`SELECT e.occurred_at, e.activity, e.staff_name, e.app_name, e.source_type,
                 sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
                 sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta
@@ -732,7 +736,7 @@ api.get('/items/:id', async (req, res) => {
       || productMeta.product?.onlineStorePreviewUrl
       || null;
     res.json({
-      item: item.rows[0], levels: levels.rows, series: series.rows,
+      item: item.rows[0], levels: levels.rows,
       lastChange: lastChange.rows[0] || null,
       shopHandle,
       links: {
@@ -743,6 +747,75 @@ api.get('/items/:id', async (req, res) => {
           ? `${storefrontBase}${storefrontBase.includes('?') ? '&' : '?'}variant=${encodeURIComponent(variantId)}`
           : null,
       },
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Inventory changes are discrete, so the chart is reconstructed from the
+// append-only ledger and the current Shopify quantity. This avoids connecting
+// sparse incremental snapshots with misleading diagonal lines.
+api.get('/items/:id/trend', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid item id' });
+
+    const state = TREND_STATES.has(req.query.state) ? req.query.state : 'available';
+    const range = TREND_RANGES.has(req.query.range) ? req.query.range : '30';
+    const locationId = req.query.location ? Number(req.query.location) : null;
+    if (locationId !== null && (!Number.isInteger(locationId) || locationId <= 0)) {
+      return res.status(400).json({ error: 'invalid location id' });
+    }
+    const locationClause = locationId ? ' AND location_id=$3' : '';
+    const baseArgs = locationId ? [id, state, locationId] : [id, state];
+
+    const [currentResult, earliestResult, locationResult] = await Promise.all([
+      q(`SELECT sum(${state})::int AS current
+         FROM current_levels
+         WHERE item_id=$1${locationId ? ' AND location_id=$2' : ''}`,
+      locationId ? [id, locationId] : [id]),
+      q(`SELECT min(occurred_at) AS earliest
+         FROM inventory_ledger
+         WHERE item_id=$1 AND state=$2${locationClause}`, baseArgs),
+      locationId
+        ? q('SELECT name FROM locations WHERE id=$1', [locationId])
+        : Promise.resolve({ rows: [{ name: '全部仓位' }] }),
+    ]);
+
+    const earliestAt = earliestResult.rows[0]?.earliest || null;
+    const now = new Date();
+    const from = trendStart(range, earliestAt, now);
+    const current = currentResult.rows[0]?.current ?? null;
+    let deltas = [];
+    if (from) {
+      const deltaArgs = locationId
+        ? [id, state, locationId, from.toISOString()]
+        : [id, state, from.toISOString()];
+      const fromParam = locationId ? '$4' : '$3';
+      const result = await q(`
+        SELECT to_char((occurred_at AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD') AS day,
+               sum(delta)::int AS delta
+        FROM inventory_ledger
+        WHERE item_id=$1 AND state=$2${locationClause}
+          AND occurred_at >= ${fromParam}
+        GROUP BY (occurred_at AT TIME ZONE 'UTC')::date
+        ORDER BY (occurred_at AT TIME ZONE 'UTC')::date`, deltaArgs);
+      deltas = result.rows;
+    }
+
+    res.json({
+      state,
+      range,
+      location: locationResult.rows[0]?.name || '未知仓位',
+      earliestAt,
+      from: from?.toISOString() || null,
+      to: now.toISOString(),
+      ...buildInventoryTrend({
+        current,
+        deltas,
+        from,
+        to: now,
+        hasHistory: Boolean(earliestAt),
+      }),
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

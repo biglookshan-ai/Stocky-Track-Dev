@@ -502,31 +502,161 @@ async function viewItems() {
   await run();
 }
 
-function lineChart(series) {
-  if (!series.length) return '<p class="muted">暂无快照数据（每日快照跑过之后这里会出现全生命周期曲线）。</p>';
-  const w = 1000, h = 220, pad = 36;
-  const xs = series.map((p) => +new Date(p.snap_date));
-  const ys = series.map((p) => p.available ?? 0);
-  const [x0, x1] = [Math.min(...xs), Math.max(...xs) || 1];
-  const y1 = Math.max(...ys, 1);
-  const X = (x) => pad + (w - 2 * pad) * (x1 === x0 ? 0.5 : (x - x0) / (x1 - x0));
-  const Y = (y) => h - pad - (h - 2 * pad) * (y / y1);
-  const d = series.map((p, i) => `${i ? 'L' : 'M'}${X(+new Date(p.snap_date)).toFixed(1)},${Y(p.available ?? 0).toFixed(1)}`).join(' ');
-  return `<svg class="chart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
-    <line x1="${pad}" y1="${h - pad}" x2="${w - pad}" y2="${h - pad}" stroke="#e1e3e5"/>
-    <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h - pad}" stroke="#e1e3e5"/>
-    <text x="${pad - 6}" y="${pad + 4}" text-anchor="end" font-size="11" fill="#6d7175">${y1}</text>
-    <text x="${pad - 6}" y="${h - pad}" text-anchor="end" font-size="11" fill="#6d7175">0</text>
-    <text x="${pad}" y="${h - pad + 16}" font-size="11" fill="#6d7175">${series[0].snap_date}</text>
-    <text x="${w - pad}" y="${h - pad + 16}" text-anchor="end" font-size="11" fill="#6d7175">${series[series.length - 1].snap_date}</text>
-    <path d="${d}" fill="none" stroke="#7b47f1" stroke-width="2"/>
-  </svg>`;
+const TREND_METRICS = {
+  available: { label: 'Available', help: '可用于销售或分配的库存。负数通常表示超卖或尚未完成库存修正。' },
+  on_hand: { label: 'On hand', help: '仓位内实际持有的库存，包括 Available 与各类不可售库存。' },
+  committed: { label: 'Committed', help: '已经分配给订单、尚未完成出库的库存。' },
+  incoming: { label: 'Incoming', help: '已经在采购或调拨流程中、尚未到达仓位的库存。' },
+};
+const CHART_RANGES = { 30: '最近 30 天', 90: '最近 90 天', 180: '最近 180 天', all: '全部记录' };
+const shortDay = (value) => new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
+const levelTotal = (levels, key) => {
+  const values = levels.map((level) => level[key]).filter((value) => value !== null && value !== undefined);
+  return values.length ? values.reduce((sum, value) => sum + Number(value), 0) : null;
+};
+const inventoryNumber = (value, key = '') => {
+  if (value === null || value === undefined) return '<span class="inventory-value muted">未提供</span>';
+  const className = key === 'available' && Number(value) < 0 ? 'negative' : Number(value) > 0 ? 'positive' : '';
+  return `<span class="inventory-value ${className}">${esc(value)}</span>`;
+};
+const metricCard = (levels, key) => {
+  const metric = TREND_METRICS[key];
+  const value = levelTotal(levels, key);
+  return `<div class="inventory-metric ${key === 'available' && Number(value) < 0 ? 'attention' : ''}">
+    <div class="inventory-metric-label">${metric.label} ${infoTip(metric.help)}</div>
+    ${inventoryNumber(value, key)}
+    <div class="inventory-metric-note">${key === 'available' && Number(value) < 0
+      ? `库存不足 ${Math.abs(Number(value))}`
+      : key === 'incoming' && Number(value) > 0 ? `${value} 件正在入库` : '全部仓位合计'}</div>
+  </div>`;
+};
+const locationCard = (level) => {
+  const available = level.available === null ? null : Number(level.available);
+  const unavailable = level.unavailable === null ? null : Number(level.unavailable);
+  const detailStates = [
+    ['Committed', level.committed],
+    ['Reserved', level.reserved],
+    ['Damaged', level.damaged],
+    ['Safety stock', level.safety_stock],
+    ['Quality control', level.quality_control],
+  ].filter(([, value]) => value !== null && value !== undefined);
+  const status = available < 0
+    ? `<span class="location-status danger">库存不足 ${Math.abs(available)}</span>`
+    : Number(level.incoming || 0) > 0
+      ? `<span class="location-status incoming">有 ${esc(level.incoming)} 件在途</span>`
+      : '<span class="location-status">库存已同步</span>';
+  return `<article class="location-inventory-card">
+    <header>
+      <div><h3>${esc(level.name)}</h3>${status}</div>
+      <span class="location-updated">更新于 ${fmtDate(level.updated_at)}</span>
+    </header>
+    <div class="location-metrics">
+      <div><span>Available</span>${inventoryNumber(level.available, 'available')}</div>
+      <div><span>On hand</span>${inventoryNumber(level.on_hand)}</div>
+      <div><span>Incoming</span>${inventoryNumber(level.incoming)}</div>
+      <div class="unavailable-total"><span>Unavailable ${infoTip('由 On hand − Available 计算，是不可售库存总量；Committed 等状态包含在其中，不应与其再次相加。')}</span>${inventoryNumber(unavailable)}</div>
+    </div>
+    <div class="location-breakdown">
+      <span>Unavailable 明细</span>
+      ${detailStates.length
+        ? detailStates.map(([name, value]) => `<span>${name} <strong>${esc(value)}</strong></span>`).join('')
+        : '<span class="muted">Shopify 未提供明细</span>'}
+    </div>
+  </article>`;
+};
+
+function inventoryTrendChart(data) {
+  const metric = TREND_METRICS[data.state] || TREND_METRICS.available;
+  if (data.current === null || data.current === undefined) {
+    return `<div class="trend-empty"><strong>${metric.label} 暂无数据</strong><span>Shopify 尚未提供这个库存状态。</span></div>`;
+  }
+  if (!data.hasHistory || data.points.length < 2) {
+    return `<div class="trend-empty"><strong>当前 ${metric.label}：${esc(data.current)}</strong><span>还没有足够的修改记录可绘制趋势；系统不会用两个日期制造一条假折线。</span></div>`;
+  }
+
+  const points = data.points.map((point) => ({ ...point, time: +new Date(point.at), value: Number(point.value) }));
+  const w = 1000, h = 270, left = 58, right = 24, top = 18, bottom = 46;
+  const xMin = points[0].time;
+  const xMax = points[points.length - 1].time;
+  const rawMin = Math.min(0, ...points.map((point) => point.value));
+  const rawMax = Math.max(0, ...points.map((point) => point.value));
+  const rawSpan = rawMax - rawMin;
+  const margin = rawSpan === 0 ? 1 : Math.max(1, rawSpan * 0.12);
+  const yMin = rawMin - margin;
+  const yMax = rawMax + margin;
+  const X = (value) => left + (w - left - right) * (xMax === xMin ? 0.5 : (value - xMin) / (xMax - xMin));
+  const Y = (value) => top + (h - top - bottom) * (yMax - value) / (yMax - yMin);
+  const line = points.reduce((path, point, index) => {
+    const x = X(point.time).toFixed(1);
+    const y = Y(point.value).toFixed(1);
+    return index ? `${path} H${x} V${y}` : `M${x},${y}`;
+  }, '');
+  const zeroY = Y(0).toFixed(1);
+  const area = `M${X(points[0].time).toFixed(1)},${zeroY} L${X(points[0].time).toFixed(1)},${Y(points[0].value).toFixed(1)} ${line.slice(line.indexOf(' ') + 1)} L${X(points.at(-1).time).toFixed(1)},${zeroY} Z`;
+  const tickCount = 4;
+  const yTicks = [...new Set(Array.from(
+    { length: tickCount + 1 },
+    (_, index) => Math.round(yMin + (yMax - yMin) * index / tickCount),
+  ))].sort((a, b) => a - b);
+  const xTicks = [xMin, xMin + (xMax - xMin) / 2, xMax];
+  const pointMarks = points.map((point, index) => {
+    if (point.kind === 'baseline' && index === 0) return '';
+    const x = X(point.time);
+    const y = Y(point.value);
+    return `<g class="trend-point" tabindex="0" role="button"
+      aria-label="${esc(`${fmtDate(point.at)}，${metric.label} ${point.value}`)}"
+      data-x="${(x / w * 100).toFixed(2)}" data-y="${(y / h * 100).toFixed(2)}"
+      data-date="${esc(fmtDate(point.at))}" data-value="${esc(point.value)}"
+      data-delta="${point.delta === null || point.delta === undefined ? '' : esc(point.delta)}">
+      <circle class="trend-dot" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="3.5"/>
+      <circle class="trend-hit" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="14"/>
+    </g>`;
+  }).join('');
+
+  return `<div class="trend-chart-wrap" data-trend-chart>
+    <div class="trend-current"><span>${esc(data.location)} · ${metric.label}</span><strong>${esc(data.current)}</strong></div>
+    <svg class="inventory-chart" viewBox="0 0 ${w} ${h}" role="img" aria-label="${esc(`${metric.label} 库存趋势`)}">
+      <defs><linearGradient id="inventory-trend-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#008060" stop-opacity=".18"/>
+        <stop offset="100%" stop-color="#008060" stop-opacity=".015"/>
+      </linearGradient></defs>
+      ${yTicks.map((tick) => `<g>
+        <line x1="${left}" y1="${Y(tick).toFixed(1)}" x2="${w - right}" y2="${Y(tick).toFixed(1)}" class="${Math.abs(tick) < .001 ? 'trend-zero-line' : 'trend-grid-line'}"/>
+        <text x="${left - 10}" y="${(Y(tick) + 4).toFixed(1)}" text-anchor="end" class="trend-axis-label">${Math.round(tick)}</text>
+      </g>`).join('')}
+      <path d="${area}" class="trend-area"/>
+      <path d="${line}" class="trend-line"/>
+      ${pointMarks}
+      ${xTicks.map((time, index) => `<text x="${X(time).toFixed(1)}" y="${h - 16}" text-anchor="${index === 0 ? 'start' : index === 2 ? 'end' : 'middle'}" class="trend-axis-label">${esc(shortDay(time))}</text>`).join('')}
+    </svg>
+    <div class="trend-tooltip" role="status"></div>
+    <div class="trend-caption"><span>阶梯线表示库存只在操作发生时改变</span><span>${esc(CHART_RANGES[data.range] || '')} · 截至 ${fmtDate(data.to)}</span></div>
+  </div>`;
+}
+
+function wireTrendChart() {
+  const wrap = document.querySelector('[data-trend-chart]');
+  if (!wrap) return;
+  const tooltip = wrap.querySelector('.trend-tooltip');
+  const hide = () => tooltip.classList.remove('visible');
+  wrap.querySelectorAll('.trend-point').forEach((point) => {
+    const show = () => {
+      const delta = point.dataset.delta;
+      tooltip.innerHTML = `<strong>${esc(point.dataset.value)}</strong><span>${esc(point.dataset.date)}${delta ? ` · 变动 ${signed(delta)}` : ' · 当前库存'}</span>`;
+      tooltip.style.left = `${Math.max(8, Math.min(92, Number(point.dataset.x)))}%`;
+      tooltip.style.top = `${Math.max(14, Number(point.dataset.y))}%`;
+      tooltip.classList.add('visible');
+    };
+    point.addEventListener('mouseenter', show);
+    point.addEventListener('focus', show);
+    point.addEventListener('mouseleave', hide);
+    point.addEventListener('blur', hide);
+  });
 }
 
 async function viewItem(id) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const { item, levels, series, shopHandle, links, lastChange } = await api(`/items/${id}`);
-  const totalAvailable = levels.reduce((sum, level) => sum + Number(level.available || 0), 0);
+  const { item, levels, shopHandle, links, lastChange } = await api(`/items/${id}`);
   const latestLevelUpdate = levels.reduce((latest, level) =>
     !latest || +new Date(level.updated_at) > +new Date(latest) ? level.updated_at : latest, null);
   app.innerHTML = `
@@ -537,16 +667,38 @@ async function viewItem(id) {
         ${links.admin ? `<a class="button" href="${esc(links.admin)}" target="_blank" rel="noopener">打开 Shopify 后台 ↗</a>` : ''}
       </div></div>
       <div class="product-detail-meta">${codeMeta(item)}<span>零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</span></div>
-      <div class="product-summary">
-        <div><span>Available</span><strong>${totalAvailable}</strong></div>
-        <div><span>Last inventory change</span><strong>${lastChange ? esc(lastInventoryChange(lastChange)) : 'No history'}</strong></div>
-        <div><span>Last modified</span><strong>${fmtDate(lastChange?.occurred_at || latestLevelUpdate)}</strong></div>
+      <div class="inventory-overview-grid">
+        ${metricCard(levels, 'available')}
+        ${metricCard(levels, 'on_hand')}
+        ${metricCard(levels, 'committed')}
+        ${metricCard(levels, 'incoming')}
       </div>
-      ${lineChart(series)}
+      <div class="inventory-last-change">
+        <span>最近库存变动 <strong>${lastChange ? esc(lastInventoryChange(lastChange)) : '暂无记录'}</strong></span>
+        <span>最近同步 <strong>${fmtDate(latestLevelUpdate)}</strong></span>
+      </div>
     </div>
-    <div class="card"><h2>Inventory by location</h2>
-      <div class="table-scroll"><table><thead><tr><th>Location</th><th class="num">Unavailable</th><th class="num">Committed</th><th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th><th>Last updated</th></tr></thead>
-      <tbody>${levels.map((l) => `<tr><td>${esc(l.name)}</td><td class="num">${l.unavailable ?? '—'}</td><td class="num">${l.committed ?? '—'}</td><td class="num">${l.available ?? '—'}</td><td class="num">${l.on_hand ?? '—'}</td><td class="num">${l.incoming ?? '—'}</td><td>${fmtDate(l.updated_at)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">No inventory locations</td></tr>'}</tbody></table></div>
+    <div class="card inventory-trend-card">
+      <div class="card-heading">
+        <div><h2>库存趋势</h2><p class="muted compact">根据已保存的修改记录反推每日库存；使用阶梯线，不把离散操作显示成连续下降。</p></div>
+        <div class="trend-controls">
+          <select id="trend-state" aria-label="库存状态">
+            ${Object.entries(TREND_METRICS).map(([value, meta]) => `<option value="${value}">${meta.label}</option>`).join('')}
+          </select>
+          <select id="trend-location" aria-label="仓位">
+            <option value="">全部仓位</option>
+            ${levels.map((level) => `<option value="${esc(level.location_id)}">${esc(level.name)}</option>`).join('')}
+          </select>
+          <select id="trend-range" aria-label="时间范围">
+            ${Object.entries(CHART_RANGES).map(([value, label]) => `<option value="${value}" ${value === '30' ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div id="inventory-trend"><div class="trend-loading">正在读取库存趋势…</div></div>
+    </div>
+    <div class="card">
+      <div class="card-heading"><div><h2>各仓库存状态</h2><p class="muted compact">Unavailable 是不可售总量，Committed 等状态属于其明细，不重复相加。</p></div></div>
+      <div class="location-inventory-list">${levels.map(locationCard).join('') || '<div class="trend-empty">Shopify 尚未提供仓位库存。</div>'}</div>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>历史修改记录</h2><p id="history-range" class="muted compact">本地已保存的全部时间范围，可分页查看。</p></div>
@@ -556,6 +708,29 @@ async function viewItem(id) {
       <div id="history-pagination" class="pagination"></div>
     </div>
     <div class="notice"><strong>关于历史期限：</strong>Shopify 商品页仅显示最近 180 天；本应用会长期保留已采集记录。当前最早日期取决于首次同步时间，Stocky 更早历史需通过导入补齐。</div>`;
+
+  let trendRequest = 0;
+  const loadTrend = async () => {
+    const request = ++trendRequest;
+    const params = new URLSearchParams({
+      state: $('#trend-state').value,
+      range: $('#trend-range').value,
+    });
+    if ($('#trend-location').value) params.set('location', $('#trend-location').value);
+    $('#inventory-trend').innerHTML = '<div class="trend-loading">正在读取库存趋势…</div>';
+    try {
+      const result = await api(`/items/${id}/trend?${params}`);
+      if (request !== trendRequest) return;
+      $('#inventory-trend').innerHTML = inventoryTrendChart(result);
+      wireTrendChart();
+    } catch (error) {
+      if (request === trendRequest) $('#inventory-trend').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
+    }
+  };
+  $('#trend-state').onchange = loadTrend;
+  $('#trend-location').onchange = loadTrend;
+  $('#trend-range').onchange = loadTrend;
+  loadTrend();
 
   let historyPage = 1;
   const loadHistory = async () => {
