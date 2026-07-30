@@ -275,13 +275,17 @@ async function mergeLedgerChange({
     removed_placeholder AS (
       DELETE FROM inventory_ledger
       WHERE id = (
-        SELECT id FROM inventory_ledger
-        WHERE item_id=$11 AND location_id=$12 AND state=$13 AND delta=$14
-          AND external_change_id IS NULL
-          AND source_type IN ('unknown','external_app')
-          AND occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
-                              AND $15::timestamptz + interval '10 minutes'
-        ORDER BY abs(extract(epoch FROM (occurred_at - $15::timestamptz))) ASC
+        SELECT lg.id
+        FROM inventory_ledger lg
+        JOIN inventory_events pe ON pe.id=lg.event_id
+        WHERE lg.item_id=$11 AND lg.location_id=$12
+          AND lg.state=$13 AND lg.delta=$14
+          AND lg.external_change_id IS NULL
+          AND pe.source_type='unknown'
+          AND pe.shopify_group_gid LIKE 'webhook:%'
+          AND lg.occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
+                                 AND $15::timestamptz + interval '10 minutes'
+        ORDER BY abs(extract(epoch FROM (lg.occurred_at - $15::timestamptz))) ASC
         LIMIT 1
       )
         AND EXISTS (SELECT 1 FROM updated)
@@ -301,13 +305,17 @@ async function mergeLedgerChange({
       ledger_document_uri=$9, qty_after=COALESCE($10, qty_after),
       attribution='shopifyql', attributed_at=now()
     WHERE id = (
-      SELECT id FROM inventory_ledger
-      WHERE item_id=$11 AND location_id=$12 AND state=$13 AND delta=$14
-        AND external_change_id IS NULL
-        AND source_type IN ('unknown','external_app')
-        AND occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
-                            AND $15::timestamptz + interval '10 minutes'
-      ORDER BY abs(extract(epoch FROM (occurred_at - $15::timestamptz))) ASC
+      SELECT lg.id
+      FROM inventory_ledger lg
+      JOIN inventory_events pe ON pe.id=lg.event_id
+      WHERE lg.item_id=$11 AND lg.location_id=$12
+        AND lg.state=$13 AND lg.delta=$14
+        AND lg.external_change_id IS NULL
+        AND pe.source_type='unknown'
+        AND pe.shopify_group_gid LIKE 'webhook:%'
+        AND lg.occurred_at BETWEEN $15::timestamptz - interval '10 minutes'
+                               AND $15::timestamptz + interval '10 minutes'
+      ORDER BY abs(extract(epoch FROM (lg.occurred_at - $15::timestamptz))) ASC
       LIMIT 1
     )`,
     mergeParams);
@@ -429,7 +437,9 @@ export async function mergeNearbyProvisionalEvents() {
     SELECT DISTINCT e.id
     FROM inventory_events e
     JOIN inventory_ledger lg ON lg.event_id=e.id
-    WHERE e.source_type='unknown' AND lg.attribution='pending'
+    WHERE e.source_type='unknown'
+      AND e.shopify_group_gid LIKE 'webhook:%'
+      AND lg.external_change_id IS NULL
     ORDER BY e.id`);
   if (!pendingEvents.rowCount) return 0;
   const winners = new Map();

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   classifySalesMovement,
+  dedupeProvisionalSalesRows,
   salesHistoryStart,
   summarizeSalesHistory,
 } from '../src/sales-history.js';
@@ -165,6 +166,41 @@ test('sales history derives pending quantities per order without treating them a
   assert.equal(result.summary.salesOrders, 1);
   assert.equal(result.summary.pendingOrders, 1);
   assert.equal(result.summary.cancelledOrders, 1);
+});
+
+test('sales history prefers the formal order event over its realtime placeholder', () => {
+  const rows = [
+    {
+      event_id: 20,
+      occurred_at: '2026-07-30T13:01:15.000Z',
+      activity: 'inventory_updated',
+      reason: 'pending_attribution',
+      source_type: 'unknown',
+      ledger_source_type: 'sale',
+      location_id: 1,
+      on_hand_delta: 0,
+      available_delta: -1,
+    },
+    {
+      ...base,
+      event_id: 21,
+      occurred_at: '2026-07-30T13:01:11.000Z',
+      activity: 'purchased',
+      location_id: 1,
+      on_hand_delta: 0,
+      available_delta: -1,
+    },
+  ];
+
+  assert.deepEqual(dedupeProvisionalSalesRows(rows).map((row) => row.event_id), [21]);
+  const result = summarizeSalesHistory(rows, {
+    from: new Date('2026-07-30T00:00:00.000Z'),
+    to: new Date('2026-07-30T23:59:59.000Z'),
+    bucket: 'day',
+  });
+  assert.equal(result.summary.ordered, 1);
+  assert.equal(result.summary.pending, 1);
+  assert.equal(result.summary.orderedOrders, 1);
 });
 
 test('salesHistoryStart supports rolling week through annual periods', () => {

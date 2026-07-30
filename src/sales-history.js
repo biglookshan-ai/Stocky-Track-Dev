@@ -27,6 +27,30 @@ const referenceText = (row) => normalized([
   row.reference_document_id,
 ].filter(Boolean).join(' '));
 
+const isProvisionalInventoryRow = (row) => {
+  const activity = normalized(row.activity);
+  const reason = normalized(row.reason);
+  return !referenceText(row)
+    && (activity === 'inventory_updated'
+      || reason === 'pending_attribution'
+      || normalized(row.source_type) === 'unknown');
+};
+
+export function dedupeProvisionalSalesRows(rows, windowMs = 30000) {
+  return rows.filter((row, index) => {
+    if (!isProvisionalInventoryRow(row)) return true;
+    return !rows.some((candidate, candidateIndex) => {
+      if (candidateIndex === index || !referenceText(candidate)) return false;
+      return String(candidate.location_id ?? candidate.location ?? '')
+          === String(row.location_id ?? row.location ?? '')
+        && Number(candidate.on_hand_delta || 0) === Number(row.on_hand_delta || 0)
+        && Number(candidate.available_delta || 0) === Number(row.available_delta || 0)
+        && Math.abs(+new Date(candidate.occurred_at) - +new Date(row.occurred_at))
+          <= windowMs;
+    });
+  });
+}
+
 export function salesHistoryStart(range, earliestAt, now = new Date()) {
   const config = SALES_RANGES.get(range) || SALES_RANGES.get('30');
   if (range === 'all') return earliestAt ? dayStart(earliestAt) : null;
@@ -154,7 +178,7 @@ export function summarizeSalesHistory(rows, {
   bucket = 'day',
   currentAvailable = null,
 } = {}) {
-  const movements = rows
+  const movements = dedupeProvisionalSalesRows(rows)
     .map((row) => {
       const classified = classifySalesMovement(row);
       return classified ? {

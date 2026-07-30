@@ -1313,15 +1313,17 @@ api.post('/alerts/:id/resolve', async (req, res) => {
 app.use('/api', api);
 
 // ---- Scheduler ----
-// Webhook processing every 5s; attribution every 2min; snapshot daily at
-// SNAPSHOT_HOUR UTC (default 03). Single instance → simple loops + db lock.
+// Webhook processing every 5s; provisional cleanup every 30s; attribution
+// every 2min; snapshot daily at SNAPSHOT_HOUR UTC (default 03).
+// Single instance → simple loops + db lock.
 function startScheduler() {
   setInterval(() => processPending().catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
-  setInterval(() => runAttribution()
-    .then(() => mergeNearbyProvisionalEvents())
+  setInterval(() => mergeNearbyProvisionalEvents()
     .then((merged) => {
       if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s)`);
     })
+    .catch((e) => console.error('[sched] placeholder cleanup:', e.message)), 30000);
+  setInterval(() => runAttribution()
     .catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {
     withLock('shopify-heavy', 15 * 60 * 1000,
