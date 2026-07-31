@@ -449,21 +449,50 @@ async function ingestEnrichedRemainders(rows, enriched, lookup) {
   return { inserted, matched, skipped };
 }
 
+// Pure decision for the sum-coverage merge pass: every provisional state row
+// must be fully explained by the SUM of formal deltas for the same
+// item/location/state inside the window. A coalesced webhook (one -2 placeholder
+// vs two formal -1 rows) passes; any mismatch — including contamination by an
+// unrelated operation in the window — fails closed and the placeholder stays.
+export function coveredBySum(provisionalRows, formalRows, windowMs = 5 * 60 * 1000) {
+  if (!provisionalRows.length) return false;
+  for (const p of provisionalRows) {
+    const at = +new Date(p.occurred_at);
+    const matches = formalRows.filter((f) =>
+      String(f.item_id) === String(p.item_id)
+      && String(f.location_id) === String(p.location_id)
+      && f.state === p.state
+      && Math.abs(+new Date(f.occurred_at) - at) <= windowMs);
+    if (!matches.length) return false;
+    const sum = matches.reduce((acc, f) => acc + Number(f.delta), 0);
+    if (sum !== Number(p.delta)) return false;
+  }
+  return true;
+}
+
 // ShopifyQL reporting can arrive after the realtime webhook placeholder has
-// already been saved. If a later canonical event contains every quantity
-// change from that placeholder at the same item/location within 30 seconds,
-// the two rows describe the same Shopify operation. Remove only the provisional
-// duplicate; the enriched ShopifyQL event remains the audit source.
+// already been saved. Placeholders are removed once the formal audit trail
+// covers them:
+//   Pass 1 — a single formal event matches every placeholder row exactly
+//            (±30s, per-row delta equality).
+//   Pass 2 — for placeholders older than 10 minutes: the SUM of all formal
+//            deltas for the same item/location/state within ±6 minutes equals
+//            the placeholder delta (handles webhooks that coalesced several
+//            operations into one cumulative delta).
+//   Pass 3 — placeholders older than 48 hours that still match nothing are
+//            marked attribution='stale': kept in the database for diagnostics,
+//            excluded from the awaiting-formal counter. Nothing is invented
+//            and nothing user-facing is affected (the UI only shows formal
+//            events).
 export async function mergeNearbyProvisionalEvents() {
   const pendingEvents = await q(`
-    SELECT DISTINCT e.id
+    SELECT DISTINCT e.id, e.occurred_at
     FROM inventory_events e
     JOIN inventory_ledger lg ON lg.event_id=e.id
     WHERE e.source_type='unknown'
       AND e.shopify_group_gid LIKE 'webhook:%'
       AND lg.external_change_id IS NULL
     ORDER BY e.id`);
-  if (!pendingEvents.rowCount) return 0;
   const winners = new Map();
   for (const event of pendingEvents.rows) {
     const provisional = await q(`
@@ -472,6 +501,8 @@ export async function mergeNearbyProvisionalEvents() {
     [event.id]);
     const seed = provisional.rows[0];
     if (!seed) continue;
+
+    // Pass 1: exact single-event coverage.
     const candidates = await q(`
       SELECT DISTINCT event_id
       FROM inventory_ledger
@@ -485,59 +516,93 @@ export async function mergeNearbyProvisionalEvents() {
       event.id, seed.item_id, seed.location_id, seed.state, seed.delta,
       seed.occurred_at,
     ]);
-    if (!candidates.rowCount) continue;
-    const ids = candidates.rows.map((row) => row.event_id);
-    const canonical = await q(`
-      SELECT event_id, item_id, location_id, state, delta, occurred_at
-      FROM inventory_ledger
-      WHERE event_id=ANY($1::bigint[]) AND attribution='shopifyql'`,
-    [ids]);
-    for (const candidateId of ids) {
-      const rows = canonical.rows.filter((row) =>
-        String(row.event_id) === String(candidateId));
-      const fullyCovered = provisional.rows.every((p) => rows.some((c) =>
-        c.item_id === p.item_id
-        && c.location_id === p.location_id
-        && c.state === p.state
-        && c.delta === p.delta
-        && Math.abs(+new Date(c.occurred_at) - +new Date(p.occurred_at)) <= 30000));
-      if (fullyCovered) {
-        winners.set(event.id, candidateId);
-        break;
+    if (candidates.rowCount) {
+      const ids = candidates.rows.map((row) => row.event_id);
+      const canonical = await q(`
+        SELECT event_id, item_id, location_id, state, delta, occurred_at
+        FROM inventory_ledger
+        WHERE event_id=ANY($1::bigint[]) AND attribution='shopifyql'`,
+      [ids]);
+      let exact = false;
+      for (const candidateId of ids) {
+        const rows = canonical.rows.filter((row) =>
+          String(row.event_id) === String(candidateId));
+        const fullyCovered = provisional.rows.every((p) => rows.some((c) =>
+          c.item_id === p.item_id
+          && c.location_id === p.location_id
+          && c.state === p.state
+          && c.delta === p.delta
+          && Math.abs(+new Date(c.occurred_at) - +new Date(p.occurred_at)) <= 30000));
+        if (fullyCovered) {
+          winners.set(event.id, candidateId);
+          exact = true;
+          break;
+        }
       }
+      if (exact) continue;
     }
-  }
-  if (!winners.size) return 0;
 
-  const client = await pool.connect();
-  let merged = 0;
-  try {
-    await client.query('BEGIN');
-    for (const provisionalEventId of winners.keys()) {
-      const removed = await client.query(
-        `DELETE FROM inventory_ledger
-         WHERE event_id=$1`,
-        [provisionalEventId],
-      );
-      if (!removed.rowCount) continue;
-      const event = await client.query(
-        `DELETE FROM inventory_events
-         WHERE id=$1
-           AND NOT EXISTS (
-             SELECT 1 FROM inventory_ledger WHERE event_id=$1
-           )`,
-        [provisionalEventId],
-      );
-      if (event.rowCount) merged++;
+    // Pass 2: sum coverage, only once the formal trail has had time to arrive.
+    if (+new Date(event.occurred_at) > Date.now() - 10 * 60 * 1000) continue;
+    const formal = await q(`
+      SELECT lg.item_id, lg.location_id, lg.state, lg.delta, lg.occurred_at
+      FROM inventory_ledger lg
+      JOIN inventory_events fe ON fe.id=lg.event_id
+      WHERE NOT (fe.source_type='unknown' AND fe.shopify_group_gid LIKE 'webhook:%')
+        AND lg.item_id=$1 AND lg.location_id=$2
+        AND lg.occurred_at BETWEEN $3::timestamptz - interval '6 minutes'
+                               AND $3::timestamptz + interval '6 minutes'`,
+    [seed.item_id, seed.location_id, seed.occurred_at]);
+    if (coveredBySum(provisional.rows, formal.rows)) {
+      winners.set(event.id, 'sum-coverage');
     }
-    await client.query('COMMIT');
-    return merged;
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
+
+  let merged = 0;
+  if (winners.size) {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const provisionalEventId of winners.keys()) {
+        const removed = await client.query(
+          `DELETE FROM inventory_ledger
+           WHERE event_id=$1`,
+          [provisionalEventId],
+        );
+        if (!removed.rowCount) continue;
+        const event = await client.query(
+          `DELETE FROM inventory_events
+           WHERE id=$1
+             AND NOT EXISTS (
+               SELECT 1 FROM inventory_ledger WHERE event_id=$1
+             )`,
+          [provisionalEventId],
+        );
+        if (event.rowCount) merged++;
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Pass 3: keep permanently unmatched placeholders, but stop counting them.
+  const stale = await q(`
+    UPDATE inventory_ledger lg SET attribution='stale'
+    FROM inventory_events e
+    WHERE e.id=lg.event_id
+      AND e.source_type='unknown' AND e.shopify_group_gid LIKE 'webhook:%'
+      AND lg.external_change_id IS NULL
+      AND lg.attribution IN ('pending','matched')
+      AND e.occurred_at < now() - interval '48 hours'`);
+  if (stale.rowCount) {
+    console.log(`[history] marked ${stale.rowCount} unmatched placeholder row(s) stale (>48h, internal only)`);
+  }
+
+  return merged;
 }
 
 export async function runHistorySync(ctx, {

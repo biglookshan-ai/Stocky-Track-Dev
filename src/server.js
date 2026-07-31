@@ -150,7 +150,8 @@ const formalEvent = (alias) =>
 const AWAITING_FORMAL_SQL = `
   SELECT count(*)::int n FROM inventory_events e
   WHERE e.source_type='unknown' AND e.shopify_group_gid LIKE 'webhook:%'
-    AND EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)`;
+    AND EXISTS (SELECT 1 FROM inventory_ledger lg
+                WHERE lg.event_id=e.id AND lg.attribution <> 'stale')`;
 
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {

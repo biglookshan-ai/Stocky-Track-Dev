@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildHistoryQuery,
+  coveredBySum,
   classifyHistorySource,
   externalChangeId,
   groupAuditEvents,
@@ -92,4 +93,64 @@ test('groups state changes into an Admin-style inventory event', () => {
   assert.deepEqual(event.changes.on_hand, { delta: -1, qty_after: 0 });
   assert.deepEqual(event.changes.unavailable, { delta: 0, qty_after: 0 });
   assert.deepEqual(event.changes.committed, { delta: 0, qty_after: 0 });
+});
+
+// --- coveredBySum (Pass 2 of provisional placeholder merging) ---
+
+const P = (state, delta, at = '2026-07-31T10:00:00Z') => ({
+  item_id: 1, location_id: 2, state, delta, occurred_at: at,
+});
+const F = (state, delta, at = '2026-07-31T10:01:00Z') => ({
+  item_id: 1, location_id: 2, state, delta, occurred_at: at,
+});
+
+test('coveredBySum: coalesced webhook -2 covered by two formal -1 rows', () => {
+  assert.equal(coveredBySum(
+    [P('available', -2)],
+    [F('available', -1, '2026-07-31T10:00:10Z'), F('available', -1, '2026-07-31T10:00:40Z')],
+  ), true);
+});
+
+test('coveredBySum: contamination by an unrelated formal row fails closed', () => {
+  assert.equal(coveredBySum(
+    [P('available', -2)],
+    [F('available', -1), F('available', -1), F('available', 5)],
+  ), false);
+});
+
+test('coveredBySum: no formal rows fails', () => {
+  assert.equal(coveredBySum([P('available', -1)], []), false);
+});
+
+test('coveredBySum: empty provisional never merges', () => {
+  assert.equal(coveredBySum([], [F('available', -1)]), false);
+});
+
+test('coveredBySum: every provisional state must be covered', () => {
+  assert.equal(coveredBySum(
+    [P('available', -1), P('on_hand', -1)],
+    [F('available', -1)],
+  ), false);
+  assert.equal(coveredBySum(
+    [P('available', -1), P('on_hand', -1)],
+    [F('available', -1), F('on_hand', -1)],
+  ), true);
+});
+
+test('coveredBySum: formal rows outside the window are ignored', () => {
+  assert.equal(coveredBySum(
+    [P('available', -1)],
+    [F('available', -1, '2026-07-31T10:20:00Z')],
+  ), false);
+});
+
+test('coveredBySum: different item or location never matches', () => {
+  assert.equal(coveredBySum(
+    [P('available', -1)],
+    [{ item_id: 9, location_id: 2, state: 'available', delta: -1, occurred_at: '2026-07-31T10:00:30Z' }],
+  ), false);
+});
+
+test('coveredBySum: exact single formal row also passes (superset of pass 1)', () => {
+  assert.equal(coveredBySum([P('available', 3)], [F('available', 3)]), true);
 });

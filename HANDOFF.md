@@ -419,7 +419,7 @@ ShopifyQL 是审计主数据源，Webhook 是低延迟触发源。
 | 每 2 分钟 | `runAttribution()` | 尝试按订单 / Refund 归因 pending ledger |
 | webhook 触发（60s 防抖）+ 5 分钟兜底 | `runHistorySync(days: 2)` | ShopifyQL 回看最近 2 天；库存 webhook 到达后尽快拉取正式流水 |
 | 每分钟检查 | 每日 Snapshot | 到 `SNAPSHOT_HOUR` UTC 后每天只运行一次 |
-| 部署启动 | provisional 合并 | 清理正式记录已经存在的重复占位 |
+| 部署启动 | provisional 合并 | 清理正式记录已经存在的重复占位（三段式：①±30s 精确匹配 ②>10min 后按 ±6min 窗口 delta 求和覆盖，处理 webhook 合并多次变动的情况 ③>48h 仍无匹配的占位行标记 attribution='stale'，保留数据但不再计入等待数） |
 | 部署启动 | 历史恢复 | 如果 180 天回填中断，从数据库 cursor 续跑 |
 
 固定每 30 秒的“信息补全扫描”已经移除。现在只有真实 Webhook 处理完成时才触发占位合并；空闲时不会反复查询。
