@@ -126,7 +126,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
 const STATUS_HELP = {
   completion: '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。',
-  currentInventory: '当前库存直接采用 Shopify 返回的各仓位数量。每日快照只刷新当前库存基准，不会虚构操作人、原因或修改记录。',
+  currentInventory: '库存数字是实时的（变动信号一到就更新）。这里显示的是每天凌晨把全店所有商品与 Shopify 逐一核对的完成时间，是二次保险，不代表数字停留在该时刻。',
   history: '历史同步先补最近记录，再按每批最多 7 天向前读取；数据超过 Shopify 单次上限时会自动拆分。进度会按批次跳动，并非逐行增加。',
 };
 const infoTip = (text) => `<span class="info-tip" tabindex="0" role="note" aria-label="${esc(text)}" data-tooltip="${esc(text)}">?</span>`;
@@ -305,14 +305,15 @@ async function viewDashboard() {
       <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? '有同步状态需要查看' : '实时记录与 Shopify 当前库存正常'}</div></a>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">系统自动接收 Shopify 修改，并每天刷新当前库存。</p></div>
+      <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">数字实时；记录等 Shopify 官方流水确认后入账；每天凌晨全量核对。</p></div>
         <div class="heading-actions"><a class="subtle-link" href="#/system">查看详情 →</a>
           <span class="status-pill ${historyStatus.className}">${historyStatus.text}</span>
         </div>
       </div>
       <div class="sync-list">
-        <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；最近接收 ${fmtDate(s.webhookState?.last_inventory_at || s.webhookState?.last_received_at)}，处理 ${fmtDate(s.webhookState?.last_processed_at)}。</div></div>
-        <div><strong>当前库存刷新</strong><div class="muted">${snap ? `上次从 Shopify 刷新完成 ${fmtDate(snap.finishedAt || snap.snapDate)}。` : '尚未完成首次刷新。'}</div></div>
+        <div><strong>① 库存数字（实时）</strong><div class="muted">变动信号${s.webhooksRegistered ? '通道正常' : '未启用'}，最近一次 ${fmtDate(s.webhookState?.last_inventory_at || s.webhookState?.last_received_at)} 已即时更新数字。</div></div>
+        <div><strong>② 修改记录（官方流水）</strong><div class="muted">已入账至 ${fmtDate(s.events?.last)}${s.pendingAttribution ? `；${s.pendingAttribution} 笔变动已收到信号、等待 Shopify 官方确认后入账` : '，暂无待确认变动'}。</div></div>
+        <div><strong>③ 每日全量核对</strong><div class="muted">${snap ? `凌晨 ${fmtDate(snap.finishedAt || snap.snapDate)} 已把全店库存与 Shopify 逐一核对。` : '尚未完成首次核对。'}</div></div>
         <div><strong>历史记录</strong><div class="muted">${backfill?.running
           ? `正在进行${backfillPct ? `（约 ${backfillPct}%）` : ''}，已读取 ${backfill.fetched || 0} 行${backfill.cursor ? `，已回填到 ${fmtDate(backfill.cursor)}` : ''}；不影响当前页面使用。`
           : backfill?.error ? `同步已暂停：${esc(backfill.error)}`
@@ -948,8 +949,8 @@ async function viewSystem() {
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">等待官方流水 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">官方流水回传后自动入账，通常几分钟</div></div>
-      <div class="stat"><div class="n" style="font-size:15px">${fmtDate(status.events?.last)}</div><div class="l">官方流水已同步至</div><div class="hint">此时间之后的变动已收到实时信号，等 Shopify 报表管道回传（偶尔延迟数小时）</div></div>
-      <div class="stat ${snapshotState.className}"><div class="n">${snapshotState.value}</div><div class="l status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</div><div class="hint">${esc(snapshotState.hint)}</div></div>
+      <div class="stat"><div class="n" style="font-size:15px">${fmtDate(status.events?.last)}</div><div class="l">修改记录已入账至</div><div class="hint">此后发生的变动已收到实时信号（数字已更新），等 Shopify 官方流水确认后入账，偶尔延迟数小时</div></div>
+      <div class="stat ${snapshotState.className}"><div class="n">${snapshotState.value}</div><div class="l status-label">每日全量核对 ${infoTip(STATUS_HELP.currentInventory)}</div><div class="hint">${esc(snapshotState.hint)}</div></div>
       <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l status-label">180 天历史同步 ${infoTip(STATUS_HELP.history)}</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
     <div class="card">
