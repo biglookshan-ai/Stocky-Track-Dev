@@ -1,11 +1,11 @@
-// Daily snapshot + reconciliation. One full catalog pull per day does double
-// duty: (a) writes daily_snapshots (incremental — only changed rows, plus a
-// full baseline on the 1st of each month), (b) compares Shopify's actual
-// levels against current_levels and heals any drift with a reconciliation
-// ledger row + alert. This is the self-testing property of the system.
+// Daily authoritative Shopify snapshot. The full catalog pull writes
+// daily_snapshots (incremental — only changed rows, plus a full baseline on
+// the 1st of each month) and refreshes current_levels to Shopify's current
+// values. A snapshot is a technical checkpoint, not a business operation, so
+// it must never create user-facing ledger rows or review alerts.
 import { q, setState } from './db.js';
 import { INVENTORY_STATES, walkVariants, syncLocations } from './catalog.js';
-import { recordReconciliation, upsertCurrentLevel } from './ledger.js';
+import { upsertCurrentLevel } from './ledger.js';
 
 export async function runSnapshot(ctx) {
   const snapDate = new Date().toISOString().slice(0, 10);
@@ -20,34 +20,13 @@ export async function runSnapshot(ctx) {
     ORDER BY item_id, location_id, snap_date DESC`, [snapDate]);
   const prevMap = new Map(prev.rows.map((r) => [`${r.item_id}:${r.location_id}`, r]));
 
-  const tracked = await q(`
-    SELECT item_id, location_id, available, on_hand, committed, incoming,
-           reserved, damaged, safety_stock, quality_control
-    FROM current_levels`);
-  const trackedMap = new Map(tracked.rows.map((r) => [`${r.item_id}:${r.location_id}`, r]));
-
-  let rows = 0, drift = 0, seen = 0;
+  let rows = 0, seen = 0;
   await syncLocations(ctx);
   await walkVariants(ctx, async (itemId, locId, qty) => {
     seen++;
     const key = `${itemId}:${locId}`;
-    // (b) reconcile against what webhooks led us to believe
-    const expected = trackedMap.get(key);
-    for (const state of INVENTORY_STATES) {
-      const actualValue = qty[state] ?? null;
-      const expectedValue = expected?.[state] ?? null;
-      if (actualValue !== null && expectedValue !== null && actualValue !== expectedValue) {
-        await recordReconciliation({
-          itemId, locationId: locId, state,
-          expected: expectedValue, actual: actualValue, snapDate,
-        });
-        drift++;
-      } else if (actualValue !== null && actualValue === expectedValue) {
-        await q(`UPDATE reconcile_alerts SET resolved=true
-                 WHERE item_id=$1 AND location_id=$2 AND state=$3 AND NOT resolved`,
-          [itemId, locId, state]);
-      }
-    }
+    // Shopify is authoritative. Refresh the technical current-state cache
+    // without inventing an operation, actor, reason or event timestamp.
     await upsertCurrentLevel(itemId, locId, qty);
 
     // (a) incremental snapshot
@@ -67,7 +46,14 @@ export async function runSnapshot(ctx) {
     }
   }, { progressKey: 'snapshot_progress' });
 
-  const summary = { snapDate, variantsSeen: seen, snapshotRows: rows, driftHealed: drift, fullBaseline, finishedAt: new Date().toISOString() };
+  const summary = {
+    snapDate,
+    variantsSeen: seen,
+    snapshotRows: rows,
+    currentLevelsRefreshed: seen,
+    fullBaseline,
+    finishedAt: new Date().toISOString(),
+  };
   await setState('last_snapshot', summary);
   console.log('[snapshot]', JSON.stringify(summary));
   return summary;

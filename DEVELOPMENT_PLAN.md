@@ -94,15 +94,15 @@
                        │   ·本app调整/盘点(referenceDocumentUri精确匹配)│
                        │   ·orders/create → sale  ·refunds → return    │
                        │  每晚 ShopifyQL inventory_adjustment_history  │
-                       │  对账,补齐外部app/admin手动操作的 staff/reason │
+                       │  补全外部app/admin手动操作的 staff/reason     │
                        └──────────────┬───────────────────────────────┘
                                       ▼
                        ┌──────────────────────────────────────────────┐
                        │ ③ 快照层  snapshot.js (每日 03:00 UTC)        │
                        │  全量 variant×location 的 available/on_hand/  │
                        │  cost 写 daily_snapshots(增量式:只存有变化行, │
-                       │  每月1日存全量基线) + 与账本推算值对账,        │
-                       │  漂移>0 记 reconcile_alerts                   │
+                       │  每月1日存全量基线) + 刷新 current_levels；    │
+                       │  不生成推算操作或人工复核告警                  │
                        └──────────────────────────────────────────────┘
 ```
 
@@ -110,7 +110,7 @@
 - **webhook 只给新值不给 delta**（无 reason/操作人），所以 delta 自算 + 归因后补——这是整个系统最核心的机制。
 - **本 app 发起的写操作**（调整/盘点/虚拟库存）走 `inventoryAdjustQuantities`，带 `reason` + `referenceDocumentUri`（指向我们的调整单 URL），Shopify 侧和账本双边都有完整审计；webhook 回流时靠 referenceDocumentUri 识别为自己，不重复记账。
 - **幂等**：webhook 按 `X-Shopify-Webhook-Id` 去重；mutation 用 2026-04 的幂等 key；导入按 (来源,单号,行号) 唯一约束。
-- **快照是自愈机制**：webhook 万一漏（服务重启/Shopify 重试耗尽），日快照对账会发现账本推算值 ≠ 实际值，插入一条 `reconciliation` 修正行并告警，账本永远收敛到真实。
+- **快照是权威当前值检查点**：webhook 万一漏（服务重启/Shopify 重试耗尽），日快照直接用 Shopify 真值刷新 `current_levels`。快照不虚构业务操作、操作人、原因或人工告警；修改历史仍只来自 ShopifyQL、webhook 和本应用已提交操作。
 
 ---
 
@@ -130,7 +130,7 @@ inventory_ledger(id, item_id, location_id, state,      -- state: available|on_ha
       delta, qty_after, occurred_at, recorded_at,
       source_type,                                     -- sale|refund|adjustment|stocktake|bundle_op|
                                                        -- transfer|external_app|admin_manual|import|
-                                                       -- reconciliation|unknown
+                                                       -- unknown
       source_ref,                                      -- 订单号/调整单id/webhook id…
       reason_code, staff_id, notes,
       attribution, attributed_at)                      -- pending|matched|shopifyql|manual
@@ -141,6 +141,7 @@ webhook_events(id, webhook_id UNIQUE, topic, payload jsonb, received_at, process
 daily_snapshots(snap_date, item_id, location_id, available, on_hand, incoming,
       unit_cost, PRIMARY KEY(snap_date,item_id,location_id))  -- 增量存储+月度全量基线
 reconcile_alerts(id, snap_date, item_id, location_id, expected, actual, resolved)
+  -- 仅保留旧版本历史结构；008 起全部归档且不再新增
 
 -- 调整
 adjustment_reasons(id, name, direction, active, position)
@@ -178,9 +179,9 @@ auth-embedded.js     ← search-panel 复用：session token 验证 + token exch
 shopify.js           GraphQL client（限流重试、幂等key、成本追踪）
 db.js                pg 连接池 + migrate（启动时跑 migrations/*.sql）
 webhooks.js          HMAC 验证 → webhook_events 落库（同步返回200，处理全在后台）
-ledger.js            账本写入（delta 计算、幂等、对账修正行）
+ledger.js            账本写入（delta 计算、幂等）
 attribution.js       归因任务（订单/退款/自家单据匹配 + 每晚 ShopifyQL 对账）
-snapshot.js          日快照 + 漂移检测
+snapshot.js          Shopify 当前库存日快照 + current_levels 刷新
 catalog.js           products/variants/locations 同步（全量初始化 + webhook 增量）
 adjustments.js       调整单 CRUD + 应用（inventoryAdjustQuantities）
 virtualstock.js      虚拟库存 设置/撤销
@@ -208,7 +209,7 @@ lark.js              (P3) 飞书推送
 5. catalog 全量同步（products/variants/locations → items 表）
 6. webhooks.js + ledger.js：inventory_levels/update 开始进账本（此时全部 unknown 也没关系）
 7. snapshot.js 日快照上线
-8. **验收：连续 3 天，快照对账零漂移或漂移可解释；账本记录到真实变动（团队在 Stocky 里的日常调整会以 external_app 形式进账本）**
+8. **验收：连续 3 天快照正常完成、当前值与 Shopify 一致；账本只记录真实变动（团队在 Stocky 里的日常调整会以 external_app 形式进账本）**
 
 ### M1 · 归因 + 只读 UI（7/17 – 7/27）
 1. attribution.js：orders/refunds webhook 关联销售/退货；ShopifyQL 每晚对账补 reason/staff（验证 read_reports + shopifyqlQuery 在本店可用性——**M1 第一天就验**，不可用则降级为"订单归因+其余标 external"）
@@ -247,12 +248,12 @@ lark.js              (P3) 飞书推送
 | 单元 | delta 计算、归因匹配规则、bundle 可组装数、盘点差异生成、CSV 解析 | node:test（零依赖），核心逻辑函数纯化便于测试 |
 | Webhook | HMAC 验签、重复投递幂等（同 webhook_id 重放）、乱序到达（旧值后到不得回滚账本）、payload fixture 回放 | 保存真实 payload 做 fixtures，`node --test` 回放 |
 | 集成 | GraphQL mutation 幂等 key、限流(429)重试、token 过期刷新 | 对 dev store 跑；shopify.js 做可注入 mock |
-| **对账（最重要）** | 账本推算值 vs Shopify 实际值每日自动对账，这本身就是常驻测试；漂移即告警 | snapshot.js 内建，M0 起生效 |
+| **当前值校验（最重要）** | 每日从 Shopify 刷新全部库存状态，确认 current_levels 与 Shopify 一致；不生成推算业务记录 | snapshot.js 内建，M0 起生效 |
 | 导入 | Stocky CSV 全量导入后行数/汇总核对（如 Manual adjustment 应为 1173 条）、重复导入幂等 | 导入脚本自带校验报告 |
 | UAT | kay/Ling 真实业务试用（M2 的 8/11-8/24 平行期即 UAT）；手机盘点在店内实测 | 反馈直接迭代 |
 | 环境 | 先装 Partner dev store 走通增删改；prod 店 M0 起只读采集（无写风险），写操作（M2）先在 dev store 全量验证后才对 prod 放开 | |
 
-不追求覆盖率数字，追求三条硬保证：**账本不丢（对账自愈）、不重（幂等）、调整写入不出错（dev store 先验 + 平行期人工核对）**。
+不追求覆盖率数字，追求三条硬保证：**当前库存以 Shopify 为准、账本不重（幂等）、调整写入不出错（dev store 先验 + 平行期人工核对）**。
 
 ---
 
@@ -261,7 +262,7 @@ lark.js              (P3) 飞书推送
 - Railway：web（Node）+ Postgres 插件 + Volume /data；`SHOPIFY_API_KEY/SECRET/API_VERSION=2026-04/DATABASE_URL/DATA_DIR`
 - 迁移：启动时自动跑 migrations/（与 promo-manager 同模式）
 - 备份：Railway PG 自动备份 + 每周 pg_dump 到 Volume + 每月手动下载本地（账本是核心资产）
-- 监控：/healthz（webhook 积压量、上次快照时间、未归因条数）；对账告警 → Lark webhook
+- 监控：/healthz（webhook 积压量、上次快照时间、未归因条数）
 - 安全：offline token 加密存储；员工操作全部记账；调整应用需确认弹窗；无对外公开端点（App Proxy 不需要）
 
 ---
@@ -272,7 +273,7 @@ lark.js              (P3) 飞书推送
 |---|------|------|
 | ShopifyQL `inventory_adjustment_history` 在本店计划不可用 | 外部操作归因缺 staff/reason | M1 第一天验证；降级方案：订单/退款/自家操作已覆盖绝大多数，其余标 external_app（Stocky 期间的操作本来就能从导出 CSV 补） |
 | 8/31 前开发延期 | 团队没工具用 | 功能砍法已预留：F8 盘点、F9 bundles 可 9 月补（团队 4 年没盘点）；**唯一不可延期的是 F1+F2（账本+调整）** |
-| webhook 漏收 | 账本缺行 | 日快照对账自愈 + reconciliation 修正行 + 告警 |
+| webhook 漏收 | 修改历史暂缺行 | 日快照先保证当前库存采用 Shopify 真值；ShopifyQL 增量随后补齐正式修改记录 |
 | 写库存出 bug（多扣/少扣） | 真实库存错乱 | 写操作只走一个函数出口；dev store 全量验证；平行期人工核对；每笔有 referenceDocumentUri 可追溯可反向 |
 | 2026-04 API 幂等 key 强制、行为差异 | mutation 失败 | shopify.js 统一生成 UUID 幂等 key，pin 2026-04 版本，升级前读 changelog |
 | Stocky 提前限制导出 | 历史丢失 | **本周就导**（M0 第 1 项），不等开发 |

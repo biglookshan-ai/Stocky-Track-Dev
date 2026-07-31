@@ -1,8 +1,8 @@
 # inventory-app — CGP Inventory（Stocky 替代）
 
 CineGearPro 自研库存管理 app。核心是**全生命周期库存账本**：
-webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 ShopifyQL 对账）→
-每日快照层（对账自愈）。完整计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)。
+webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 ShopifyQL 补全）→
+每日 Shopify 当前库存快照层。完整计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)。
 
 ## 架构（M0 + M1 + M2 调整已实现）
 
@@ -14,7 +14,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/inventory-history.js` — ShopifyQL 调整历史同步；员工/App/原因/引用/库存状态归并
 - `src/sales-history.js` — 商品真实销售/退货/采购入库分类、周期统计与补货基础指标
 - `src/references.js` — Order / Transfer 编号、客户、状态与 Shopify Admin 链接解析及缓存
-- `src/snapshot.js` — 每日全量拉取 = 快照 + 漂移对账自愈
+- `src/snapshot.js` — 每日全量拉取 Shopify 当前库存，刷新本地基准并保存趋势检查点
 - `src/catalog.js` — 商品目录同步及 8 个 Shopify 库存状态基线
 - `src/adjustments.js` — 调整单 Draft / 提交 / 幂等重试 / 归档 / 原因与员工映射 / CSV
 - `src/adjustment-attachments.js` — 调整证据附件校验、Volume 文件存储与访问控制
@@ -23,7 +23,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 
 当前业务界面支持 Brand、Collection、Available 和最近库存修改时间筛选/排序；
 商品详情提供 Shopify 前台/后台入口、英文库存状态和长期保存的分页历史；首页可查看
-最近 3 天修改商品（每页 10 个），并进入系统状态页复核对账差异。商品信息以 Barcode
+最近 3 天修改商品（每页 10 个），并进入系统状态页查看实时接收与数据同步。商品信息以 Barcode
 为第一识别字段，Barcode、SKU、Brand 紧凑显示在标题下方；商品列表重点展示
 Unavailable、Committed、Available、On hand、Incoming。全店每条修改事件均可展开查看
 涉及商品、仓位和各库存状态变化，多商品事件也会列出完整明细。
@@ -39,8 +39,8 @@ Before / Change / After，再经二次确认写入 Shopify。Draft 可保存图�
 顶栏全局搜索与修改记录筛选可按人员、商品名称、Brand、Barcode、SKU、订单/调拨引用和
 调整编号查询。库存 webhook 到达后会先立即显示为「库存信息补全中」；ShopifyQL 后续会
 在同一账本行补齐真实 Activity、员工/App 和业务单据，不会等几分钟后才首次出现。
-后台每 30 秒检查一次已到达的正式记录并自动合并 Webhook 占位；即使占位已经临时归因为
-sale/refund 也仍可清理，不需要手动触发同步。
+Webhook 处理完成后会事件触发检查已到达的正式记录并自动合并占位；即使占位已经临时归因为
+sale/refund 也仍可清理，不需要固定轮询或手动触发同步。
 
 商品详情的「销售历史」按最近 7 天、30 天、3 个月、半年、一年或全部记录统计，并区分
 下单占用、真实出货、待出货、取消/释放、退货和采购入库。`Order fulfilled` 导致的
@@ -59,7 +59,7 @@ On hand 减少才算已出货销量；订单导致的 Available 减少算下单�
 4. Dev Dashboard 把 App URL 指向 Railway 域名 → 商店安装 → 从 Shopify 后台打开 app
 5. 修改 scope 后重新授权/安装应用；再在「首页 → 维护工具」依次运行：**同步商品目录** → **重新注册实时接收**
 6. 在维护工具运行一次「同步 Shopify 最近 180 天」
-7. 之后账本自动记录；每 5 分钟补充完整归因，每日 03:00 UTC 快照对账（`SNAPSHOT_HOUR` 可调）
+7. 之后账本自动记录；每 5 分钟补充完整归因，每日 03:00 UTC 刷新 Shopify 当前库存快照（`SNAPSHOT_HOUR` 可调）
 
 首次 180 天历史回填会受 ShopifyQL 分钟配额限制并在后台断点续传；默认每次查询间隔
 16 秒（`SHOPIFYQL_PACE_MS` 可调），启动和恢复时会先补最近记录，再按最多 7 天一批向前读取，
@@ -84,7 +84,7 @@ npm test               # 纯逻辑单元测试（无需数据库）
 - [ ] 初始同步完成（~9500 变体，首页显示数量）
 - [ ] 维护工具列出的 Webhooks 全部注册成功
 - [ ] 团队在 Stocky/POS 里的真实操作出现在修改记录（Created by 和引用单据正确）
-- [ ] 连续 3 天快照 driftHealed = 0（或漂移可解释）
+- [ ] 连续 3 天快照正常完成，当前库存与 Shopify 一致
 - [ ] /healthz 返回 ok 且 backlog 不增长
 - [ ] 抽查商品的 Available / On hand / Committed / Incoming 与 Shopify 一致
 - [ ] 商品修改记录中的 Activity / Created by / 各状态变化与 Shopify 一致
@@ -93,12 +93,12 @@ npm test               # 纯逻辑单元测试（无需数据库）
 
 ## 关键设计约定（改代码前必读）
 
-- **账本 append-only**：业务字段绝不 UPDATE；修正靠追加 reconciliation 行。
+- **账本 append-only**：只保存 Shopify、员工或 App 返回的真实数量变化；快照检查点不伪装成业务操作。
 - **我们自己的写操作**（M2 调整等）成功后只即时确认 Available 并直写对应账本；
   On hand 等其他状态以 Shopify webhook / ShopifyQL 回传为准，避免并发回声造成重复推算。
 - **webhook 只落库就返回 200**，一切处理在后台 tick（appproxy 教训）。
 - **ShopifyQL 是审计主数据源**：webhook 负责低延迟触发；ShopifyQL 负责员工/App、原因、引用单据和多状态归因，并按外部 change ID 幂等去重。
-- **快照逐项自愈**：每日核对 8 个库存状态，任何漂移都追加 reconciliation 行并生成告警。
+- **Shopify 当前值优先**：每日刷新 8 个库存状态到 `current_levels` 并写趋势检查点，不生成本地推算告警、操作人或业务单据。
 - **业务记录与技术账本分离**：UI 按一次修改事件合并显示并分页；底层逐状态账本继续
   append-only 保存，不作为日常操作界面暴露。
 - inventory mutations 必须带幂等 key（2026-04 强制）：`shopify.js → idempotencyKey()`。

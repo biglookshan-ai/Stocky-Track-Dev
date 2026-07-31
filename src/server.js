@@ -210,7 +210,7 @@ function continueHistoryBackfill(ctx) {
 
 api.get('/status', async (req, res) => {
   try {
-    const [items, events, ledger, webhooks, pending, alerts, reasons] = await Promise.all([
+    const [items, events, ledger, webhooks, pending, reasons] = await Promise.all([
       q(`SELECT count(*)::int n, count(*) FILTER (WHERE source='local')::int local FROM items WHERE status <> 'deleted'`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last
          FROM inventory_events e
@@ -223,7 +223,6 @@ api.get('/status', async (req, res) => {
                 max(received_at) FILTER (WHERE topic='inventory_levels/update') AS last_inventory_at
          FROM webhook_events`),
       q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
-      q('SELECT count(*)::int n FROM reconcile_alerts WHERE NOT resolved'),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
     ]);
     const historySync = await getState('inventory_history_sync');
@@ -247,7 +246,9 @@ api.get('/status', async (req, res) => {
       webhookErrors: webhooks.rows[0].errors,
       webhookState: webhooks.rows[0],
       pendingAttribution: pending.rows[0].n,
-      openAlerts: alerts.rows[0].n,
+      // Kept as a rolling-deploy compatibility field for older cached clients.
+      // Snapshot checkpoints no longer create review alerts.
+      openAlerts: 0,
       reasons: reasons.rows[0].n,
       initialSync: await getState('initial_sync'),
       lastSnapshot: await getState('last_snapshot'),
@@ -781,7 +782,8 @@ api.get('/items/:id/trend', async (req, res) => {
       locationId ? [id, locationId] : [id]),
       q(`SELECT min(occurred_at) AS earliest
          FROM inventory_ledger
-         WHERE item_id=$1 AND state=$2${locationClause}`, baseArgs),
+         WHERE item_id=$1 AND state=$2
+           AND source_type <> 'reconciliation'${locationClause}`, baseArgs),
       locationId
         ? q('SELECT name FROM locations WHERE id=$1', [locationId])
         : Promise.resolve({ rows: [{ name: '全部仓位' }] }),
@@ -808,7 +810,8 @@ api.get('/items/:id/trend', async (req, res) => {
           FROM inventory_ledger lg
           LEFT JOIN inventory_events ev ON ev.id=lg.event_id
           JOIN locations loc ON loc.id=lg.location_id
-          WHERE lg.item_id=$1 AND lg.state=$2${ledgerLocationClause}
+          WHERE lg.item_id=$1 AND lg.state=$2
+            AND lg.source_type <> 'reconciliation'${ledgerLocationClause}
             AND lg.occurred_at >= ${fromParam}
         )
         SELECT min(occurred_at) AS at,
@@ -1313,16 +1316,17 @@ api.post('/alerts/:id/resolve', async (req, res) => {
 app.use('/api', api);
 
 // ---- Scheduler ----
-// Webhook processing every 5s; provisional cleanup every 30s; attribution
-// every 2min; snapshot daily at SNAPSHOT_HOUR UTC (default 03).
+// Webhook processing every 5s; provisional cleanup after processed events;
+// attribution every 2min; snapshot daily at SNAPSHOT_HOUR UTC (default 03).
 // Single instance → simple loops + db lock.
 function startScheduler() {
-  setInterval(() => processPending().catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
-  setInterval(() => mergeNearbyProvisionalEvents()
-    .then((merged) => {
+  setInterval(() => processPending()
+    .then(async (processed) => {
+      if (!processed) return;
+      const merged = await mergeNearbyProvisionalEvents();
       if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s)`);
     })
-    .catch((e) => console.error('[sched] placeholder cleanup:', e.message)), 30000);
+    .catch((e) => console.error('[sched] webhooks:', e.message)), 5000);
   setInterval(() => runAttribution()
     .catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {

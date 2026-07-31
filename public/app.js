@@ -126,7 +126,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
 const STATUS_HELP = {
   completion: '库存数量变化已经保存。系统正在补充操作原因、员工或 App，以及关联的 Order、Transfer 或调整编号；这不代表记录丢失。',
-  discrepancy: '每日库存核对发现本应用推算值与 Shopify 当前值曾不一致。本应用只把本地记录校正到 Shopify 真值，不会修改 Shopify 库存；请确认差异合理后标记已确认。',
+  currentInventory: '当前库存直接采用 Shopify 返回的各仓位数量。每日快照只刷新当前库存基准，不会虚构操作人、原因或修改记录。',
   history: '历史同步先补最近记录，再按每批最多 7 天向前读取；数据超过 Shopify 单次上限时会自动拆分。进度会按批次跳动，并非逐行增加。',
 };
 const infoTip = (text) => `<span class="info-tip" tabindex="0" role="note" aria-label="${esc(text)}" data-tooltip="${esc(text)}">?</span>`;
@@ -292,7 +292,7 @@ async function viewDashboard() {
       : { text: '自动运行中', className: 'success' };
   const webhookMissingScopes = missingWebhookScopes(s.webhooksRegistered);
   const hasAttention = s.webhookBacklog > 20 || s.webhookErrors > 0
-    || s.pendingAttribution > 100 || s.openAlerts > 0;
+    || s.pendingAttribution > 100;
   const coverage = s.events.first ? `${new Date(s.events.first).toLocaleDateString('zh-CN')} 至今` : '尚无记录';
   app.innerHTML = `
     <div class="page-heading">
@@ -302,17 +302,17 @@ async function viewDashboard() {
       <a class="stat stat-link" href="#/items"><div class="n">${s.items.n}</div><div class="l">商品 / Barcode</div><div class="hint">查看商品与各仓库存</div></a>
       <a class="stat stat-link" href="#/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
       <a class="stat stat-link" href="#/history"><div class="n range">${coverage}</div><div class="l">已保存的历史范围</div><div class="hint">点击查看历史修改记录</div></a>
-      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${s.openAlerts ? '库存有差异' : hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${s.openAlerts ? `${s.openAlerts} 条库存差异，点击查看` : hasAttention ? '有系统状态需要查看' : '实时记录与库存核对正常'}</div></a>
+      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? '有同步状态需要查看' : '实时记录与 Shopify 当前库存正常'}</div></a>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">系统自动接收 Shopify 修改，并每天核对库存。</p></div>
+      <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">系统自动接收 Shopify 修改，并每天刷新当前库存。</p></div>
         <div class="heading-actions"><a class="subtle-link" href="#/system">查看详情 →</a>
           <span class="status-pill ${historyStatus.className}">${historyStatus.text}</span>
         </div>
       </div>
       <div class="sync-list">
         <div><strong>实时修改记录</strong><div class="muted">Webhook 已${s.webhooksRegistered ? '启用' : '未启用'}；最近接收 ${fmtDate(s.webhookState?.last_inventory_at || s.webhookState?.last_received_at)}，处理 ${fmtDate(s.webhookState?.last_processed_at)}。</div></div>
-        <div><strong>每日库存核对</strong><div class="muted">${snap ? `上次完成 ${fmtDate(snap.finishedAt || snap.snapDate)}，自动修正 ${snap.driftHealed} 处差异。` : '尚未完成首次核对。'}</div></div>
+        <div><strong>当前库存刷新</strong><div class="muted">${snap ? `上次从 Shopify 刷新完成 ${fmtDate(snap.finishedAt || snap.snapDate)}。` : '尚未完成首次刷新。'}</div></div>
         <div><strong>历史记录</strong><div class="muted">${backfill?.running
           ? `正在进行${backfillPct ? `（约 ${backfillPct}%）` : ''}，已读取 ${backfill.fetched || 0} 行${backfill.cursor ? `，已回填到 ${fmtDate(backfill.cursor)}` : ''}；不影响当前页面使用。`
           : backfill?.error ? `同步已暂停：${esc(backfill.error)}`
@@ -332,11 +332,11 @@ async function viewDashboard() {
       <div id="recent-products-pagination" class="pagination"></div>
     </div>
     <details class="card system-details">
-      <summary>系统状态说明 ${s.openAlerts ? `<span class="badge unknown">${s.openAlerts} 条库存差异</span>` : ''}</summary>
+      <summary>系统状态说明</summary>
       <div class="health-grid">
         <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。处理错误 ${s.webhookErrors || 0} 条；通常两者都应为 0。</p></div>
         <div><strong class="status-label">库存信息补全：${s.pendingAttribution} ${infoTip(STATUS_HELP.completion)}</strong><p>数量变化已保存，正在补充订单、员工、App 和关联编号。</p></div>
-        <div><strong class="status-label">库存有差异：${s.openAlerts} ${infoTip(STATUS_HELP.discrepancy)}</strong><p>本地记录已按 Shopify 真值校正，等待人工确认差异。</p></div>
+        <div><strong class="status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</strong><p>当前数量直接采用 Shopify 真值；快照不会生成推算告警。</p></div>
       </div>
     </details>
     <details class="card system-details">
@@ -360,17 +360,17 @@ async function viewDashboard() {
             : '未注册'}</span>
       </div>
       <div class="row">
-        <button id="btn-snapshot" class="secondary">立即核对库存</button>
+        <button id="btn-snapshot" class="secondary">刷新 Shopify 当前库存</button>
         <span class="muted">${s.snapshotError?.error
           ? `❌ ${esc(s.snapshotError.error)}`
-          : snap ? `上次快照 ${snap.snapDate}：${snap.snapshotRows} 行，修复漂移 ${snap.driftHealed}` : '尚无快照'}</span>
+          : snap ? `上次刷新 ${snap.snapDate}：保存 ${snap.snapshotRows} 条变化快照` : '尚未刷新'}</span>
       </div>
       <div class="row">
         <button id="btn-history" class="secondary">同步 Shopify 最近 180 天</button>
         <span class="muted">${backfill ? backfill.running ? `⏳ 历史回填中… 已读取 ${backfill.fetched || 0} 行` : backfill.error ? `❌ ${esc(backfill.error)}` : `历史回填完成 ${fmtDate(backfill.finishedAt)}：新增 ${backfill.inserted || 0}` : '尚未回填'}
         ${history?.finishedAt ? ` · 信息补全 ${fmtDate(history.finishedAt)}` : ''}</span>
       </div>
-      <p class="muted compact">这些工具仅用于安装、恢复或人工复核；日常使用无需点击。</p>
+      <p class="muted compact">这些工具仅用于安装、恢复或手动刷新；日常使用无需点击。</p>
     </details>
     <div class="notice"><strong>历史范围说明：</strong>Shopify 商品 Adjustment history 页面提供最近 180 天。本应用会永久保存已经采集或导入的记录；要补齐更早的 Stocky 历史，需要后续导入 Stocky 导出文件。</div>`;
   let recentPage = 1;
@@ -931,7 +931,7 @@ async function viewItem(id) {
 
 async function viewSystem() {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const [status, alerts] = await Promise.all([api('/status'), api('/alerts')]);
+  const status = await api('/status');
   const pct = backfillPercent(status.historyBackfill);
   const historyState = status.historyBackfill?.running
     ? { value: `${pct || '…'}%`, hint: `已读取 ${status.historyBackfill.fetched || 0} 行${status.historyBackfill.cursor ? `，已回填到 ${fmtDate(status.historyBackfill.cursor)}` : ''}`, className: '' }
@@ -940,44 +940,25 @@ async function viewSystem() {
       : status.historyBackfill?.finishedAt
         ? { value: '完成', hint: '自动增量记录中', className: 'ok' }
         : { value: '未开始', hint: '可从首页维护工具开始同步', className: 'warn' };
-  const productAdmin = (row) => {
-    const id = String(row.shopify_product_gid || '').split('/').pop();
-    return id ? `https://admin.shopify.com/store/${encodeURIComponent(alerts.shopHandle)}/products/${encodeURIComponent(id)}` : null;
-  };
+  const snapshotState = status.lastSnapshot
+    ? { value: '已刷新', hint: fmtDate(status.lastSnapshot.finishedAt || status.lastSnapshot.snapDate), className: 'ok' }
+    : { value: '未开始', hint: '可从首页维护工具刷新', className: 'warn' };
   app.innerHTML = `
-    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看同步进度、库存信息补全和库存差异。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
+    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">库存信息补全 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">正在补充订单、员工、App 和关联编号</div></div>
-      <div class="stat ${status.openAlerts ? 'warn' : 'ok'}"><div class="n">${status.openAlerts}</div><div class="l status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</div><div class="hint">本地已按 Shopify 真值校正，等待确认</div></div>
+      <div class="stat ${snapshotState.className}"><div class="n">${snapshotState.value}</div><div class="l status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</div><div class="hint">${esc(snapshotState.hint)}</div></div>
       <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l status-label">180 天历史同步 ${infoTip(STATUS_HELP.history)}</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2 class="status-label">库存有差异 ${infoTip(STATUS_HELP.discrepancy)}</h2><p class="muted compact">本地数量已经校正到 Shopify 实际值；请确认差异合理，然后标记为已确认。</p></div></div>
-      <div class="table-scroll"><table><thead><tr><th>商品</th><th>Location</th><th>State</th><th class="num">Expected</th><th class="num">Shopify actual</th><th>Detected</th><th>操作</th></tr></thead>
-      <tbody>${alerts.rows.map((row) => {
-        const admin = productAdmin(row);
-        return `<tr><td><a class="item-link" href="#/items/${row.item_id}">${productName(row)}</a>${codeMeta(row)}</td>
-          <td>${esc(row.location)}</td><td>${esc(activityLabel(row.state))}</td>
-          <td class="num">${row.expected ?? '—'}</td><td class="num">${row.actual ?? '—'}</td>
-          <td>${fmtDate(row.created_at)}</td><td><div class="button-group">
-            ${admin ? `<a class="button secondary small-button" href="${admin}" target="_blank" rel="noopener">Shopify 调整 ↗</a>` : ''}
-            <button class="secondary small-button resolve-alert" data-id="${row.id}">标记已确认</button>
-          </div></td></tr>`;
-      }).join('') || '<tr><td colspan="7" class="muted">当前没有库存差异。</td></tr>'}</tbody></table></div>
+      <div class="card-heading"><div><h2>数据记录原则</h2><p class="muted compact">界面展示 Shopify 已返回的真实库存数量变化，不展示本地推算告警。</p></div></div>
+      <div class="health-grid">
+        <div><strong>当前库存</strong><p>直接使用 Shopify 返回的各仓位 Available、On hand、Committed 和 Incoming。</p></div>
+        <div><strong>修改记录</strong><p>来自 Shopify Adjustment history、实时库存事件和本应用已提交的调整单；操作人和关联单据会随后自动补全。</p></div>
+        <div><strong>每日快照</strong><p>只刷新当前库存基准并保存趋势检查点，不虚构操作人、原因或业务单据。</p></div>
+      </div>
     </div>`;
-  document.querySelectorAll('.resolve-alert').forEach((button) => {
-    button.onclick = async () => {
-      button.disabled = true;
-      try {
-        await api(`/alerts/${button.dataset.id}/resolve`, { method: 'POST' });
-        await viewSystem();
-      } catch (error) {
-        alert(`操作失败：${error.message}`);
-        button.disabled = false;
-      }
-    };
-  });
 }
 
 async function viewHistory() {

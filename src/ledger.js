@@ -7,7 +7,6 @@
 //    confirm the returned Available value in current_levels. The webhook echo
 //    then computes delta 0; all other inventory states come from Shopify's
 //    queried webhook payload rather than local arithmetic.
-//  · snapshot reconciliation → recordReconciliation()
 import { pool, q } from './db.js';
 import { INVENTORY_STATES } from './catalog.js';
 
@@ -113,20 +112,6 @@ export async function recordLevelUpdate({ itemId, locationId, available, occurre
     webhookId,
   });
   return result.ledgerIds[0] || null;
-}
-
-// Snapshot found Shopify's actual value differs from our tracked value:
-// append a correcting row so the ledger always sums to reality.
-export async function recordReconciliation({ itemId, locationId, state, expected, actual, snapDate }) {
-  assertState(state);
-  await q(
-    `INSERT INTO inventory_ledger (item_id, location_id, state, delta, qty_after, occurred_at, source_type, source_ref, attribution)
-     VALUES ($1,$2,$3,$4,$5, now(), 'reconciliation', $6, 'n/a')`,
-    [itemId, locationId, state, actual - expected, actual, `snapshot ${snapDate}`]
-  );
-  await q(`INSERT INTO reconcile_alerts (snap_date, item_id, location_id, state, expected, actual)
-           VALUES ($1,$2,$3,$4,$5,$6)`,
-    [snapDate, itemId, locationId, state, expected, actual]);
 }
 
 export async function upsertCurrentLevel(itemId, locationId, qty) {
