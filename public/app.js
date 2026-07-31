@@ -948,6 +948,7 @@ async function viewSystem() {
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">等待官方流水 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">官方流水回传后自动入账，通常几分钟</div></div>
+      <div class="stat"><div class="n" style="font-size:15px">${fmtDate(status.events?.last)}</div><div class="l">官方流水已同步至</div><div class="hint">此时间之后的变动已收到实时信号，等 Shopify 报表管道回传（偶尔延迟数小时）</div></div>
       <div class="stat ${snapshotState.className}"><div class="n">${snapshotState.value}</div><div class="l status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</div><div class="hint">${esc(snapshotState.hint)}</div></div>
       <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l status-label">180 天历史同步 ${infoTip(STATUS_HELP.history)}</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
