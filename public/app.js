@@ -125,7 +125,7 @@ async function wireAttachmentActions(adjustmentId, attachments = []) {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
 const STATUS_HELP = {
-  completion: '库存数量变化已经保存。系统正在补充操作原因、员工或 App，以及关联的 Order、Transfer 或调整编号；这不代表记录丢失。',
+  completion: '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。',
   currentInventory: '当前库存直接采用 Shopify 返回的各仓位数量。每日快照只刷新当前库存基准，不会虚构操作人、原因或修改记录。',
   history: '历史同步先补最近记录，再按每批最多 7 天向前读取；数据超过 Shopify 单次上限时会自动拆分。进度会按批次跳动，并非逐行增加。',
 };
@@ -135,7 +135,7 @@ const SOURCE_LABEL = {
   sale: 'Sale', refund: 'Return', adjustment: 'Adjustment', stocktake: 'Stocktake',
   import: 'Historical import', reconciliation: 'Reconciliation', external_app: 'App',
   admin_manual: 'Staff', order: 'Order', transfer: 'Transfer',
-  unknown: '库存信息补全中', bundle_op: 'Bundle',
+  unknown: '等待官方流水', bundle_op: 'Bundle',
 };
 const srcBadge = (s) => `<span class="badge ${esc(s)}">${SOURCE_LABEL[s] || esc(s)}</span>`;
 const ACTIVITY_LABEL = {
@@ -335,7 +335,7 @@ async function viewDashboard() {
       <summary>系统状态说明</summary>
       <div class="health-grid">
         <div><strong>实时接收队列：${s.webhookBacklog}</strong><p>Shopify 已发送、应用尚未处理的事件。处理错误 ${s.webhookErrors || 0} 条；通常两者都应为 0。</p></div>
-        <div><strong class="status-label">库存信息补全：${s.pendingAttribution} ${infoTip(STATUS_HELP.completion)}</strong><p>数量变化已保存，正在补充订单、员工、App 和关联编号。</p></div>
+        <div><strong class="status-label">等待官方流水：${s.pendingAttribution} ${infoTip(STATUS_HELP.completion)}</strong><p>数量已实时更新；记录待 Shopify 官方流水回传后入账（通常几分钟）。</p></div>
         <div><strong class="status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</strong><p>当前数量直接采用 Shopify 真值；快照不会生成推算告警。</p></div>
       </div>
     </details>
@@ -947,7 +947,7 @@ async function viewSystem() {
     <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
-      <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">库存信息补全 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">正在补充订单、员工、App 和关联编号</div></div>
+      <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">等待官方流水 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">官方流水回传后自动入账，通常几分钟</div></div>
       <div class="stat ${snapshotState.className}"><div class="n">${snapshotState.value}</div><div class="l status-label">Shopify 当前库存 ${infoTip(STATUS_HELP.currentInventory)}</div><div class="hint">${esc(snapshotState.hint)}</div></div>
       <div class="stat ${historyState.className}"><div class="n">${historyState.value}</div><div class="l status-label">180 天历史同步 ${infoTip(STATUS_HELP.history)}</div><div class="hint">${esc(historyState.hint)}</div></div>
     </div>
@@ -980,7 +980,6 @@ async function viewHistory() {
             ${[
               ['sale', 'Sale'], ['refund', 'Return'], ['transfer', 'Transfer'],
               ['adjustment', 'Adjustment'], ['staff', 'Staff'], ['app', 'App'],
-              ['unknown', '库存信息补全中'],
             ].map(([value, label]) => `<option value="${value}" ${filters.source === value ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
           <input id="history-from" type="date" value="${esc(filters.dateFrom)}" aria-label="开始日期">

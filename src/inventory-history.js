@@ -298,6 +298,28 @@ async function mergeLedgerChange({
     return canonical.rows[0].merged ? { matched: true } : { skipped: true };
   }
 
+  // Rows this app wrote at adjustment-apply time already live under the SAME
+  // event (upsertEvent matched the Shopify adjustment-group gid). Claim the
+  // matching row instead of inserting a duplicate audit row — and keep the
+  // locally recorded staff/notes/reason, only attaching the external change id
+  // and Shopify-side telemetry.
+  const own = await q(`
+    UPDATE inventory_ledger SET
+      external_change_id=$2,
+      qty_after=COALESCE(qty_after, $3),
+      ledger_document_uri=COALESCE(ledger_document_uri, $4),
+      attribution='shopifyql', attributed_at=now()
+    WHERE id = (
+      SELECT id FROM inventory_ledger
+      WHERE event_id=$1 AND external_change_id IS NULL
+        AND item_id=$5 AND location_id=$6 AND state=$7 AND delta=$8
+        AND occurred_at BETWEEN $9::timestamptz - interval '10 minutes'
+                            AND $9::timestamptz + interval '10 minutes'
+      ORDER BY id LIMIT 1
+    )`,
+  [event.id, changeId, qtyAfter, ledgerDocumentUri, itemId, locationId, state, delta, occurredAt]);
+  if (own.rowCount) return { matched: true };
+
   const matched = await q(`
     UPDATE inventory_ledger SET
       event_id=$1, external_change_id=$2, source_type=$3, source_ref=$4,

@@ -141,6 +141,17 @@ app.get('/api/config', (req, res) => res.json({ apiKey: API_KEY, version: proces
 // ---- Webhook intake (public; HMAC-verified inside) ----
 app.post('/webhooks', receiveWebhook);
 
+// Provisional realtime placeholders (webhook-derived events still awaiting
+// Shopify's formal audit trail) are internal bookkeeping only. Every
+// user-facing surface shows formal events exclusively: a record either has its
+// definite actor/reason or it is not shown yet.
+const formalEvent = (alias) =>
+  `NOT (${alias}.source_type='unknown' AND ${alias}.shopify_group_gid LIKE 'webhook:%')`;
+const AWAITING_FORMAL_SQL = `
+  SELECT count(*)::int n FROM inventory_events e
+  WHERE e.source_type='unknown' AND e.shopify_group_gid LIKE 'webhook:%'
+    AND EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)`;
+
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {
   try {
@@ -150,7 +161,7 @@ app.get('/healthz', async (req, res) => {
                 max(received_at) AS last_received_at,
                 max(processed_at) AS last_processed_at
          FROM webhook_events`),
-      q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
+      q(AWAITING_FORMAL_SQL),
       getState('last_snapshot'),
     ]);
     res.json({
@@ -214,7 +225,8 @@ api.get('/status', async (req, res) => {
       q(`SELECT count(*)::int n, count(*) FILTER (WHERE source='local')::int local FROM items WHERE status <> 'deleted'`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last
          FROM inventory_events e
-         WHERE EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)`),
+         WHERE EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.event_id=e.id)
+           AND ${formalEvent('e')}`),
       q(`SELECT count(*)::int n, min(occurred_at) first, max(occurred_at) last FROM inventory_ledger`),
       q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
                 count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
@@ -222,7 +234,7 @@ api.get('/status', async (req, res) => {
                 max(processed_at) AS last_processed_at,
                 max(received_at) FILTER (WHERE topic='inventory_levels/update') AS last_inventory_at
          FROM webhook_events`),
-      q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`),
+      q(AWAITING_FORMAL_SQL),
       q('SELECT count(*)::int n FROM adjustment_reasons WHERE active'),
     ]);
     const historySync = await getState('inventory_history_sync');
@@ -276,6 +288,7 @@ api.get('/recent-items', async (req, res) => {
          JOIN inventory_ledger lg ON lg.event_id=e.id
          JOIN locations loc ON loc.id=lg.location_id
          WHERE e.occurred_at >= now() - interval '3 days'
+           AND ${formalEvent('e')}
          GROUP BY lg.item_id, e.id
        ),
        latest AS (
@@ -671,6 +684,7 @@ api.get('/items', async (req, res) => {
                   max(lg.qty_after) FILTER (WHERE lg.state='available')::int AS available_after
            FROM inventory_events e
            JOIN inventory_ledger lg ON lg.event_id=e.id
+           WHERE ${formalEvent('e')}
            GROUP BY lg.item_id, e.id
          ),
          latest AS (
@@ -720,7 +734,7 @@ api.get('/items/:id', async (req, res) => {
                 sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta
          FROM inventory_events e
          JOIN inventory_ledger lg ON lg.event_id=e.id
-         WHERE lg.item_id=$1
+         WHERE lg.item_id=$1 AND ${formalEvent('e')}
          GROUP BY e.id
          ORDER BY e.occurred_at DESC, e.id DESC
          LIMIT 1`, [id]),
@@ -780,10 +794,12 @@ api.get('/items/:id/trend', async (req, res) => {
          FROM current_levels
          WHERE item_id=$1${locationId ? ' AND location_id=$2' : ''}`,
       locationId ? [id, locationId] : [id]),
-      q(`SELECT min(occurred_at) AS earliest
-         FROM inventory_ledger
-         WHERE item_id=$1 AND state=$2
-           AND source_type <> 'reconciliation'${locationClause}`, baseArgs),
+      q(`SELECT min(lg.occurred_at) AS earliest
+         FROM inventory_ledger lg
+         LEFT JOIN inventory_events ev ON ev.id=lg.event_id
+         WHERE lg.item_id=$1 AND lg.state=$2
+           AND lg.source_type <> 'reconciliation'
+           AND (ev.id IS NULL OR ${formalEvent('ev')})${ledgerLocationClause}`, baseArgs),
       locationId
         ? q('SELECT name FROM locations WHERE id=$1', [locationId])
         : Promise.resolve({ rows: [{ name: '全部仓位' }] }),
@@ -811,7 +827,8 @@ api.get('/items/:id/trend', async (req, res) => {
           LEFT JOIN inventory_events ev ON ev.id=lg.event_id
           JOIN locations loc ON loc.id=lg.location_id
           WHERE lg.item_id=$1 AND lg.state=$2
-            AND lg.source_type <> 'reconciliation'${ledgerLocationClause}
+            AND lg.source_type <> 'reconciliation'
+            AND (ev.id IS NULL OR ${formalEvent('ev')})${ledgerLocationClause}
             AND lg.occurred_at >= ${fromParam}
         )
         SELECT min(occurred_at) AS at,
@@ -932,7 +949,7 @@ api.get('/items/:id/history', async (req, res) => {
     const pageSize = Math.min(100, Math.max(10, Number(req.query.limit || 25)));
     const location = String(req.query.location || '').trim().slice(0, 120);
     const params = [id];
-    const filters = ['lg.item_id=$1', 'lg.event_id IS NOT NULL'];
+    const filters = ['lg.item_id=$1', 'lg.event_id IS NOT NULL', formalEvent('e')];
     if (location) {
       params.push(location);
       filters.push(`loc.name=$${params.length}`);
@@ -1003,7 +1020,8 @@ api.get('/items/:id/history', async (req, res) => {
                  SELECT sum(newer.delta)
                  FROM inventory_ledger newer
                  JOIN inventory_events newer_event ON newer_event.id=newer.event_id
-                 WHERE newer.item_id=$1 AND newer.location_id=s.location_id
+                 WHERE ${formalEvent('newer_event')}
+                   AND newer.item_id=$1 AND newer.location_id=s.location_id
                    AND newer.state=states.state
                    AND (newer_event.occurred_at > e.occurred_at
                      OR (newer_event.occurred_at=e.occurred_at AND newer_event.id > e.id))
@@ -1036,6 +1054,7 @@ api.get('/items/:id/history', async (req, res) => {
 function historyFilters(query, params) {
   const filters = [
     'EXISTS (SELECT 1 FROM inventory_ledger visible_lg WHERE visible_lg.event_id=e.id)',
+    formalEvent('e'),
   ];
   const add = (value) => {
     params.push(value);
@@ -1320,9 +1339,16 @@ app.use('/api', api);
 // attribution every 2min; snapshot daily at SNAPSHOT_HOUR UTC (default 03).
 // Single instance → simple loops + db lock.
 function startScheduler() {
+  // Formal Shopify audit rows lag realtime webhooks by a few minutes (Shopify's
+  // reporting pipeline). Kick a history sync shortly after inventory webhooks
+  // arrive — instead of a fixed 5-minute wait — so formal records appear as
+  // soon as Shopify can provide them. The periodic run stays as a backstop.
+  let historyKickPending = false;
+  let lastHistoryRunAt = 0;
   setInterval(() => processPending()
-    .then(async (processed) => {
+    .then(async ({ processed, inventoryChanged }) => {
       if (!processed) return;
+      if (inventoryChanged) historyKickPending = true;
       const merged = await mergeNearbyProvisionalEvents();
       if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s)`);
     })
@@ -1330,10 +1356,16 @@ function startScheduler() {
   setInterval(() => runAttribution()
     .catch((e) => console.error('[sched] attribution:', e.message)), 120000);
   setInterval(() => {
+    const now = Date.now();
+    const kicked = historyKickPending && now - lastHistoryRunAt > 60 * 1000;
+    const periodic = now - lastHistoryRunAt > 5 * 60 * 1000;
+    if (!kicked && !periodic) return;
+    historyKickPending = false;
+    lastHistoryRunAt = now;
     withLock('shopify-heavy', 15 * 60 * 1000,
       async () => runHistorySync(await offlineCtx(), { days: 2 }))
       .catch((e) => console.error('[sched] inventory history:', e.message));
-  }, 5 * 60 * 1000);
+  }, 30 * 1000);
   setInterval(async () => {
     try {
       const hour = Number(process.env.SNAPSHOT_HOUR ?? 3);

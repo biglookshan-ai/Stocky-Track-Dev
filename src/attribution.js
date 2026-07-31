@@ -1,10 +1,9 @@
-// Attribution pass: label pending ledger rows with what caused them.
-// M0/M1 sources, in matching order:
+// Attribution pass: label pending (internal, provisional) ledger rows with a
+// best-effort cause so sales dedupe and internal diagnostics have context:
 //   1. orders/create   → negative deltas that match an order line (sale)
 //   2. refunds/create  → positive deltas that match a restocked refund line
-//   3. fallback        → rows older than 48h become external_app
-// A nightly ShopifyQL reconciliation (inventory_adjustment_history) will later
-// upgrade external_app rows with staff/reason where available (M1).
+// The formal source of truth is the ShopifyQL audit trail (inventory-history.js);
+// user-facing surfaces only ever show formal events.
 import { q } from './db.js';
 
 // Pure matcher, exported for unit tests.
@@ -88,12 +87,10 @@ export async function runAttribution() {
     }
   }
 
-  // Stale fallback: after 48h with no match, label as external (Stocky, other
-  // apps, admin manual edits). The nightly ShopifyQL pass can refine these.
-  const stale = await q(`
-    UPDATE inventory_ledger SET source_type='external_app', attribution='n/a', attributed_at=now()
-    WHERE attribution='pending' AND recorded_at < now() - interval '48 hours'`);
-
+  // No stale fallback: a row must never be permanently labeled with a vague
+  // actor-less source. Provisional rows are internal-only (the UI shows formal
+  // ShopifyQL-backed events exclusively), so an unmatched row simply stays
+  // internal until the audit trail covers it.
   const left = await q(`SELECT count(*)::int n FROM inventory_ledger WHERE attribution='pending'`);
-  return { attributed, staleLabeled: stale.rowCount, pending: left.rows[0].n };
+  return { attributed, pending: left.rows[0].n };
 }

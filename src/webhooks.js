@@ -41,17 +41,20 @@ export async function receive(req, res) {
   }
 }
 
-// Process unhandled events oldest-first. Called by the scheduler.
+// Process unhandled events oldest-first. Called by the scheduler, which uses
+// inventoryChanged to kick an early ShopifyQL history sync.
 export async function processPending(limit = 200) {
   const rows = await q(
     `SELECT id, webhook_id, topic, shop_domain, payload FROM webhook_events
      WHERE processed_at IS NULL ORDER BY id ASC LIMIT $1`, [limit]);
   let done = 0;
+  let inventoryChanged = false;
   for (const ev of rows.rows) {
     try {
       await handle(ev.topic, ev.payload, ev.shop_domain, ev.webhook_id);
       await q('UPDATE webhook_events SET processed_at = now(), error = NULL WHERE id = $1', [ev.id]);
       done++;
+      if (ev.topic === 'inventory_levels/update') inventoryChanged = true;
     } catch (e) {
       // Leave unprocessed for retry, but record the error; a poisoned event
       // will be retried each tick until fixed — visible on /api/status.
@@ -59,7 +62,7 @@ export async function processPending(limit = 200) {
       console.error(`[webhooks] process ${ev.topic} #${ev.id} failed:`, e.message);
     }
   }
-  return done;
+  return { processed: done, inventoryChanged };
 }
 
 async function handle(topic, p, shopDomain, webhookId) {

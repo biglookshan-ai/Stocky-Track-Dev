@@ -369,7 +369,7 @@ inventory_ledger provisional rows + current_levels
         │
         ├── attribution（每 2 分钟，订单 / Refund 初步匹配）
         │
-        └── ShopifyQL inventory history（每 5 分钟回看最近 2 天）
+        └── ShopifyQL inventory history（webhook 触发 60s 防抖 + 5 分钟兜底，回看最近 2 天）
                 │
                 ▼
         inventory_events + 正式 ledger changes
@@ -395,7 +395,7 @@ Webhook 的优点是快，但库存 Webhook 主要给当前值，不完整提供
 - Order / Transfer 引用；
 - 完整多状态变化。
 
-因此 Webhook 到达后先显示 `Inventory updated / 库存信息补全中`，随后 ShopifyQL 正式记录到达时原位补齐并清除重复占位。
+因此 Webhook 只用于：秒级刷新当前库存数字、并作为内部占位记录等待正式流水。**2026-07-31 起：所有面向用户的记录列表/详情/趋势/最近变动只显示正式记录**（`formalEvent` 谓词排除 `webhook:%` 占位事件）；占位纯内部核对用，界面上不存在「补全中」状态。一笔修改在官方流水回传后（通常几分钟）以一条完整记录出现。
 
 ShopifyQL 是审计主数据源，Webhook 是低延迟触发源。
 
@@ -417,7 +417,7 @@ ShopifyQL 是审计主数据源，Webhook 是低延迟触发源。
 |---|---|---|
 | 每 5 秒 | `processPending()` | 处理未完成 Webhook；有新事件时触发 provisional 合并 |
 | 每 2 分钟 | `runAttribution()` | 尝试按订单 / Refund 归因 pending ledger |
-| 每 5 分钟 | `runHistorySync(days: 2)` | ShopifyQL 回看最近 2 天，补齐延迟记录 |
+| webhook 触发（60s 防抖）+ 5 分钟兜底 | `runHistorySync(days: 2)` | ShopifyQL 回看最近 2 天；库存 webhook 到达后尽快拉取正式流水 |
 | 每分钟检查 | 每日 Snapshot | 到 `SNAPSHOT_HOUR` UTC 后每天只运行一次 |
 | 部署启动 | provisional 合并 | 清理正式记录已经存在的重复占位 |
 | 部署启动 | 历史恢复 | 如果 180 天回填中断，从数据库 cursor 续跑 |
@@ -1010,7 +1010,7 @@ GET /healthz
 - 首次同步以前更旧的 Stocky 历史尚未导入；
 - 60 天以前订单客户信息可能因 scope 缺失不可读；
 - ShopifyQL 有分钟配额，首次回填需要较长时间；
-- ShopifyQL 相比 Webhook 会延迟，因此短暂显示“库存信息补全中”是正常的；
+- ShopifyQL 相比 Webhook 延迟几分钟，因此一笔修改的记录会晚几分钟出现在列表（当前库存数字不受影响，秒级实时）；界面不显示任何未补全的临时记录；
 - 部分 Shopify 工作流不会返回所有库存 state，必须显示“未提供”，不能写成 0。
 
 ### 运维限制
@@ -1055,7 +1055,7 @@ GET /healthz
 
 ### “库存信息补全中”长期存在
 
-1. 确认历史增量任务每 5 分钟运行；
+1. 确认历史增量任务在运行（webhook 触发 + 5 分钟兜底）；
 2. 检查 `inventory_history_sync` error；
 3. 检查 `SHOPIFYQL_PACE_MS`；
 4. 确认 `read_reports` scope；
