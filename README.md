@@ -4,6 +4,9 @@ CineGearPro 自研库存管理 app。核心是**全生命周期库存账本**：
 webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 ShopifyQL 补全）→
 每日 Shopify 当前库存快照层。完整计划见 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)。
 
+完整项目交接、架构、功能边界、数据口径、部署排障和开发时间线见
+[HANDOFF.md](HANDOFF.md)。人工验收步骤见 [TEST_PLAN.md](TEST_PLAN.md)。
+
 ## 架构（M0 + M1 + M2 调整已实现）
 
 - `src/server.js` — Express 入口 + 调度器（webhook 5s / 归因 2min / ShopifyQL 5min / 快照每日）
