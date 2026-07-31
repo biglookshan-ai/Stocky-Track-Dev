@@ -156,14 +156,18 @@ const AWAITING_FORMAL_SQL = `
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {
   try {
-    const [webhooks, pending, snap] = await Promise.all([
+    const [webhooks, pending, latestFormal, snap, historySync, historyBackfill] = await Promise.all([
       q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
                 count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
                 max(received_at) AS last_received_at,
                 max(processed_at) AS last_processed_at
          FROM webhook_events`),
       q(AWAITING_FORMAL_SQL),
+      q(`SELECT max(e.occurred_at) AS at FROM inventory_events e
+         WHERE NOT (e.source_type='unknown' AND e.shopify_group_gid LIKE 'webhook:%')`),
       getState('last_snapshot'),
+      getState('inventory_history_sync'),
+      getState('inventory_history_backfill'),
     ]);
     res.json({
       ok: true,
@@ -172,6 +176,12 @@ app.get('/healthz', async (req, res) => {
       lastWebhookReceivedAt: webhooks.rows[0].last_received_at,
       lastWebhookProcessedAt: webhooks.rows[0].last_processed_at,
       pendingAttribution: pending.rows[0].n,
+      lastFormalEventAt: latestFormal.rows[0].at,
+      historySync,
+      historyBackfill: historyBackfill && {
+        running: historyBackfill.running, cursor: historyBackfill.cursor,
+        error: historyBackfill.error || null, heartbeat: historyBackfill.heartbeat,
+      },
       lastSnapshot: snap,
     });
   } catch (e) {
