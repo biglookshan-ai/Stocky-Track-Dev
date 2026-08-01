@@ -377,7 +377,9 @@ async function viewDashboard() {
           <input type="file" id="stocky-csv" accept=".csv,text/csv">
           <button id="btn-stocky-dry" class="secondary">① 预检（只分析不写入）</button>
           <button id="btn-stocky-commit" disabled>② 确认导入</button>
+          <button id="btn-stocky-undo" class="secondary" style="color:var(--red)">撤销导入</button>
         </div>
+        <div class="muted small">撤销会删除导入的 STK 单和历史记录、并把回填的操作人/备注清回原样（不动 Shopify 原有数据）；撤销后可重新导入。</div>
         <div id="stocky-report" class="muted small"></div>
       </div>
       <p class="muted compact">这些工具仅用于安装、恢复或手动刷新；日常使用无需点击。</p>
@@ -476,6 +478,13 @@ async function viewDashboard() {
       method: 'POST', body: text, headers: { 'Content-Type': 'text/csv' },
     });
     $('#stocky-report').innerHTML = stockyReport(result.report, result);
+  });
+  $('#btn-stocky-undo').onclick = guard(async (e) => {
+    if (!confirm('撤销 Stocky 导入？将删除所有 STK 调整单和导入的历史记录，并把回填的操作人/备注清回原样。此操作可逆——之后可重新导入。')) { e.target.disabled = false; return; }
+    $('#stocky-report').innerHTML = '撤销中…';
+    const r = await api('/import/stocky/undo', { method: 'POST' });
+    $('#stocky-report').innerHTML = `<div class="notice">✅ 已撤销：删除 ${r.deletedAdjustments} 张 STK 单、${r.deletedEvents} 个历史事件、${r.deletedLedgerRows} 行明细；回退 ${r.revertedBackfillRows} 行回填；停用 ${r.deactivatedLocalItems} 个本地商品。可重新导入。</div>`;
+    e.target.disabled = false;
   });
 }
 

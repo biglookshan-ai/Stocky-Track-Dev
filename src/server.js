@@ -16,7 +16,7 @@ import {
 } from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
-import { runStockyImport } from './import-stocky.js';
+import { runStockyImport, undoStockyImport } from './import-stocky.js';
 import {
   groupAuditEvents,
   mergeNearbyProvisionalEvents,
@@ -412,6 +412,13 @@ api.post('/import/stocky', express.text({ type: '*/*', limit: '30mb' }), async (
     const result = await runStockyImport(req.body, { commit });
     res.json(result);
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Full reversal of the Stocky import (reverts back-fill, deletes STK records
+// and import events). Idempotent; lets the user redo the import cleanly.
+api.post('/import/stocky/undo', async (req, res) => {
+  try { res.json(await undoStockyImport()); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Manual triggers (also run on schedule) — useful during M0 verification.

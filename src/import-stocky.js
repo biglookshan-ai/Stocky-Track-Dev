@@ -238,7 +238,8 @@ async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
   const rowsByLine = [];
   for (const l of resolved) {
     const rows = await exec(`
-      SELECT lg.id AS ledger_id, lg.event_id, e.shopify_group_gid
+      SELECT lg.id AS ledger_id, lg.event_id, e.shopify_group_gid,
+             lg.notes, lg.reason_code, lg.actor_name, lg.staff_id
       FROM inventory_ledger lg
       JOIN inventory_events e ON e.id=lg.event_id
       WHERE lg.item_id=$1 AND lg.location_id=$2 AND lg.state='available' AND lg.delta=$3
@@ -258,6 +259,9 @@ async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
   claimedGids.add(pick.eventId);
   if (!commit) return { status: 'matched', eventGid };
 
+  // Enrich only the columns that were empty, and remember precisely which ones
+  // per row so an undo can revert them to NULL without ever touching data
+  // Shopify (or a later manual edit) already provided.
   await exec(
     `UPDATE inventory_events SET staff_name = COALESCE(staff_name, $2)
      WHERE id=$1`, [pick.eventId, e.staffName]);
@@ -265,6 +269,13 @@ async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
     const l = resolved[i];
     const ledgerRow = rowsByLine[i].find((r) => String(r.event_id) === pick.eventId);
     if (!ledgerRow) continue;
+    const staffId = l.employee ? lookups.staffByName.get(l.employee.toLowerCase()) || null : null;
+    const filled = [];
+    if (ledgerRow.notes == null && l.notes != null) filled.push('notes');
+    if (ledgerRow.reason_code == null && e.reason != null) filled.push('reason_code');
+    if (ledgerRow.actor_name == null && (l.employee || e.staffName) != null) filled.push('actor_name');
+    if (ledgerRow.staff_id == null && staffId != null) filled.push('staff_id');
+    if (!filled.length) continue;
     await exec(
       `UPDATE inventory_ledger SET
          notes = COALESCE(notes, $2),
@@ -272,9 +283,13 @@ async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
          actor_name = COALESCE(actor_name, $4),
          staff_id = COALESCE(staff_id, $5)
        WHERE id=$1`,
-      [ledgerRow.ledger_id, l.notes, e.reason,
-        l.employee || e.staffName,
-        l.employee ? lookups.staffByName.get(l.employee.toLowerCase()) || null : null]);
+      [ledgerRow.ledger_id, l.notes, e.reason, l.employee || e.staffName, staffId]);
+    await exec(
+      `INSERT INTO stocky_import_backfill (ledger_id, event_id, filled)
+       VALUES ($1, $2, $3::jsonb) ON CONFLICT (ledger_id) DO UPDATE
+       SET filled = (SELECT jsonb_agg(DISTINCT v)
+                     FROM jsonb_array_elements(stocky_import_backfill.filled || EXCLUDED.filled) v)`,
+      [ledgerRow.ledger_id, pick.eventId, JSON.stringify(filled)]);
   }
   return { status: 'matched', eventGid };
 }
@@ -505,4 +520,67 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
     client.release();
   }
   return { dryRun: false, report, eventsInserted, linesInserted, itemsCreated, adjustmentsCreated };
+}
+
+// Full reversal of a Stocky import. Everything the import CREATED is deleted by
+// its stocky:/STK- markers; everything it BACK-FILLED onto pre-existing formal
+// rows is reverted field-by-field from the tracking table (never touching data
+// Shopify or a manual edit provided). Idempotent — safe to run twice.
+export async function undoStockyImport() {
+  const client = await pool.connect();
+  const result = { revertedBackfillRows: 0, deletedAdjustments: 0, deletedEvents: 0, deletedLedgerRows: 0, deactivatedLocalItems: 0 };
+  try {
+    await client.query('BEGIN');
+
+    // 1. Revert back-filled columns on existing formal rows, then clear the log.
+    const backfill = await client.query('SELECT ledger_id, filled FROM stocky_import_backfill');
+    for (const row of backfill.rows) {
+      const cols = Array.isArray(row.filled) ? row.filled : [];
+      const sets = cols.filter((c) => ['notes', 'reason_code', 'actor_name', 'staff_id'].includes(c))
+        .map((c) => `${c} = NULL`);
+      if (sets.length) {
+        await client.query(`UPDATE inventory_ledger SET ${sets.join(', ')} WHERE id=$1`, [row.ledger_id]);
+        result.revertedBackfillRows++;
+      }
+    }
+    await client.query('DELETE FROM stocky_import_backfill');
+
+    // 2. Delete STK adjustment records (participants + lines cascade / explicit).
+    const stkIds = await client.query(`SELECT id FROM adjustments WHERE display_number LIKE 'STK-%'`);
+    for (const { id } of stkIds.rows) {
+      await client.query('DELETE FROM adjustment_participants WHERE adjustment_id=$1', [id]);
+      await client.query('DELETE FROM adjustment_lines WHERE adjustment_id=$1', [id]);
+    }
+    const delAdj = await client.query(`DELETE FROM adjustments WHERE display_number LIKE 'STK-%'`);
+    result.deletedAdjustments = delAdj.rowCount;
+
+    // 3. Delete import-created ledger rows + their events (source_type='import').
+    const delLedger = await client.query(
+      `DELETE FROM inventory_ledger WHERE event_id IN
+         (SELECT id FROM inventory_events WHERE source_type='import' AND shopify_group_gid LIKE 'stocky:%')`);
+    result.deletedLedgerRows = delLedger.rowCount;
+    const delEvents = await client.query(
+      `DELETE FROM inventory_events WHERE source_type='import' AND shopify_group_gid LIKE 'stocky:%'`);
+    result.deletedEvents = delEvents.rowCount;
+
+    // 4. Local items created by the import that now have no ledger history at all
+    //    are deactivated (not hard-deleted — a later import/adjustment may use
+    //    them, and deactivation is reversible).
+    const deact = await client.query(
+      `UPDATE items SET status='archived' WHERE source='local'
+         AND NOT EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.item_id=items.id)
+         AND NOT EXISTS (SELECT 1 FROM adjustment_lines al WHERE al.item_id=items.id)`);
+    result.deactivatedLocalItems = deact.rowCount;
+
+    // 5. Clear the one-shot flag so the import can be re-run.
+    await client.query(`DELETE FROM sync_state WHERE key='stocky_import'`);
+
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
