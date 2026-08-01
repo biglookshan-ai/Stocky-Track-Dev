@@ -18,6 +18,20 @@
 //     components; unknown locations are created inactive.
 import { q, pool } from './db.js';
 
+// ---- pure: merge duplicate (barcode, location) rows for adjustment_lines
+// (the table has a unique constraint per adjustment+item+location; the ledger
+// keeps the original per-row granularity) ----
+export function mergeAdjustmentLines(lines) {
+  const merged = new Map();
+  for (const l of lines) {
+    const key = `${l.barcode}|${l.location.toLowerCase()}`;
+    const cur = merged.get(key);
+    if (cur) cur.delta += l.delta;
+    else merged.set(key, { ...l });
+  }
+  return [...merged.values()].filter((l) => l.delta !== 0);
+}
+
 // ---- pure: RFC-4180 CSV ----
 export function parseCsv(text) {
   const src = String(text || '').replace(/^﻿/, '');
@@ -183,7 +197,9 @@ async function loadLookups(plan) {
   const locByName = new Map(locations.rows.map((l) => [l.name.toLowerCase(), l.id]));
   const staff = await q('SELECT id, display_name FROM staff');
   const staffByName = new Map(staff.rows.map((s) => [s.display_name.toLowerCase(), s.id]));
-  return { itemByBarcode, dupBarcodes: [...dupBarcodes], locByName, staffByName, barcodes };
+  const reasons = await q('SELECT id, name FROM adjustment_reasons');
+  const reasonByName = new Map(reasons.rows.map((r) => [r.name.trim().toLowerCase(), r.id]));
+  return { itemByBarcode, dupBarcodes: [...dupBarcodes], locByName, staffByName, reasonByName, barcodes };
 }
 
 export async function runStockyImport(csvText, { commit = false } = {}) {
@@ -208,6 +224,9 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   const newLocations = [...new Set(plan.events.flatMap((e) => e.lines.map((l) => l.location)))]
     .filter((n) => n && !lookups.locByName.has(n.toLowerCase()));
   const newStaff = plan.employees.filter((n) => !lookups.staffByName.has(n.toLowerCase()));
+  const newReasons = plan.reasons
+    .map(([name]) => name)
+    .filter((name) => !lookups.reasonByName.has(name.trim().toLowerCase()));
 
   const report = {
     totalCsvRows: rows.length,
@@ -223,6 +242,8 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
     employees: plan.employees,
     newStaff,
     newLocations,
+    newReasons,
+    adjustmentsToCreate: plan.events.length,
     localItemsToCreate: unmatchedBarcodes.size,
     localItemSamples: [...unmatchedBarcodes.values()].slice(0, 10)
       .map((l) => ({ barcode: l.barcode, sku: l.sku, product: l.product || '(无标题)' })),
@@ -231,9 +252,19 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   if (!commit) return { dryRun: true, report };
 
   const client = await pool.connect();
-  let eventsInserted = 0, linesInserted = 0, itemsCreated = 0;
+  let eventsInserted = 0, linesInserted = 0, itemsCreated = 0, adjustmentsCreated = 0;
   try {
     await client.query('BEGIN');
+    for (const name of newReasons) {
+      // Historical reason labels (e.g. 'Stocky Stocktakes') are preserved but
+      // created inactive so they don't appear in the new-adjustment dropdown.
+      const r = await client.query(
+        `INSERT INTO adjustment_reasons (name, direction, active, position)
+         VALUES ($1, 'any', false, 999)
+         ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
+         RETURNING id`, [name.trim()]);
+      lookups.reasonByName.set(name.trim().toLowerCase(), r.rows[0].id);
+    }
     for (const name of newLocations) {
       const r = await client.query(
         `INSERT INTO locations (shopify_gid, name, active) VALUES (NULL, $1, false) RETURNING id`, [name]);
@@ -290,6 +321,53 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
         if (r.rowCount) linesInserted++;
       }
     }
+    // The same groups become adjustment records in the 库存调整 workspace:
+    // original Stocky number as display_number 'STK-xxxx' (number stays NULL so
+    // the app's own sequence is untouched), original reason/staff/notes, one
+    // merged line per item+location, recorded_by + handled_by participants.
+    for (const e of plan.events) {
+      const adj = await client.query(
+        `INSERT INTO adjustments
+           (number, display_number, reason_id, staff_id, created_by_staff_id,
+            notes, status, applied_at, shopify_group_gid, created_at, updated_at)
+         VALUES (NULL, $1, $2, $3, $3, $4, 'applied', $5, $6, $5, $5)
+         ON CONFLICT (display_number) WHERE display_number IS NOT NULL DO NOTHING
+         RETURNING id`,
+        [
+          `STK-${e.number}`,
+          e.reason ? lookups.reasonByName.get(e.reason.trim().toLowerCase()) || null : null,
+          e.staffName ? lookups.staffByName.get(e.staffName.toLowerCase()) || null : null,
+          e.notes, e.occurredAt, `stocky:adjustment:${e.number}`,
+        ]);
+      if (!adj.rowCount) continue; // already imported
+      const adjustmentId = adj.rows[0].id;
+      adjustmentsCreated++;
+      if (e.staffName) {
+        await client.query(
+          `INSERT INTO adjustment_participants (adjustment_id, role, staff_id, display_name_snapshot)
+           VALUES ($1, 'recorded_by', $2, $3)
+           ON CONFLICT DO NOTHING`,
+          [adjustmentId, lookups.staffByName.get(e.staffName.toLowerCase()) || null, e.staffName]);
+      }
+      const others = [...new Set(e.lines.map((l) => l.employee).filter(Boolean))]
+        .filter((n) => n.toLowerCase() !== (e.staffName || '').toLowerCase());
+      for (const name of others) {
+        await client.query(
+          `INSERT INTO adjustment_participants (adjustment_id, role, staff_id, display_name_snapshot)
+           VALUES ($1, 'handled_by', $2, $3)`,
+          [adjustmentId, lookups.staffByName.get(name.toLowerCase()) || null, name]);
+      }
+      for (const l of mergeAdjustmentLines(e.lines)) {
+        const itemId = lookups.itemByBarcode.get(l.barcode);
+        const locationId = lookups.locByName.get(l.location.toLowerCase());
+        if (!itemId || !locationId) continue;
+        await client.query(
+          `INSERT INTO adjustment_lines (adjustment_id, item_id, location_id, qty_before, delta, qty_after)
+           VALUES ($1,$2,$3,NULL,$4,NULL)
+           ON CONFLICT (adjustment_id, item_id, location_id) DO NOTHING`,
+          [adjustmentId, itemId, locationId, l.delta]);
+      }
+    }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -297,5 +375,5 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   } finally {
     client.release();
   }
-  return { dryRun: false, report, eventsInserted, linesInserted, itemsCreated };
+  return { dryRun: false, report, eventsInserted, linesInserted, itemsCreated, adjustmentsCreated };
 }

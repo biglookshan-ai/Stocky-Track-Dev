@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee } from '../src/import-stocky.js';
+import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee, mergeAdjustmentLines } from '../src/import-stocky.js';
 
 test('parseCsv: quotes, embedded commas, newlines and CRLF', () => {
   const rows = parseCsv('a,b,c\r\n1,"x, y","line1\nline2"\r\n2,"he said ""hi""",z\n');
@@ -80,4 +80,21 @@ test('planImport: staffName is the most frequent employee of the group', () => {
 test('canonicalEmployee trims and nulls empties', () => {
   assert.equal(canonicalEmployee('kay '), 'kay');
   assert.equal(canonicalEmployee('  '), null);
+});
+
+test('mergeAdjustmentLines: merges same barcode+location, keeps distinct', () => {
+  const merged = mergeAdjustmentLines([
+    { barcode: 'a', location: 'Shop', delta: -1 },
+    { barcode: 'a', location: 'shop', delta: -2 },
+    { barcode: 'a', location: 'CN', delta: 5 },
+  ]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((l) => l.location === 'Shop').delta, -3);
+});
+
+test('mergeAdjustmentLines: nets to zero rows are dropped', () => {
+  assert.deepEqual(mergeAdjustmentLines([
+    { barcode: 'a', location: 'Shop', delta: -1 },
+    { barcode: 'a', location: 'Shop', delta: 1 },
+  ]), []);
 });

@@ -440,13 +440,13 @@ async function viewDashboard() {
   // Stocky legacy CSV import: dry-run report first, explicit second click to commit.
   const stockyReport = (r, committed) => `
     <div class="notice" style="margin-top:6px">
-      ${committed ? `<strong>✅ 导入完成：</strong>新增 ${committed.eventsInserted} 个事件、${committed.linesInserted} 行明细、${committed.itemsCreated} 个本地商品。<br>` : ''}
+      ${committed ? `<strong>✅ 导入完成：</strong>新增 ${committed.adjustmentsCreated} 张调整单（库存调整工作区，编号 STK-xxxx）、${committed.eventsInserted} 个修改记录事件、${committed.linesInserted} 行账本明细、${committed.itemsCreated} 个本地商品。<br>` : ''}
       <strong>预检报告</strong>（CSV ${r.totalCsvRows} 行）<br>
-      · 将导入：<strong>${r.eventsToImport}</strong> 张调整单 / ${r.linesToImport} 行（${r.dateRange ? `${r.dateRange.first.slice(0, 10)} → ${r.dateRange.last.slice(0, 10)}` : '—'}）<br>
+      · 将导入：<strong>${r.eventsToImport}</strong> 张调整单（进「库存调整」工作区，保留原编号/原因/调整人/备注）/ ${r.linesToImport} 行（${r.dateRange ? `${r.dateRange.first.slice(0, 10)} → ${r.dateRange.last.slice(0, 10)}` : '—'}）<br>
       · 跳过（${r.coverageStart ? r.coverageStart.slice(0, 10) : '—'} 起已有正式记录）：${r.skippedAlreadyCovered.groups} 单 / ${r.skippedAlreadyCovered.rows} 行<br>
       · 跳过（Stocky 中未执行 not_adjusted/failed）：${r.skippedNotAdjustedRows} 行；缺日期单：${r.missingDateGroups.length}；缺条码行：${r.missingBarcodeRows}<br>
       · 将新建本地商品（Stocky 内部 # 产品）：${r.localItemsToCreate} 个${r.localItemSamples.length ? `，如 ${r.localItemSamples.slice(0, 3).map((s) => esc(s.product)).join('、')}` : ''}<br>
-      · 将新建员工：${r.newStaff.length ? r.newStaff.map(esc).join('、') : '无'}；新建仓位：${r.newLocations.length ? r.newLocations.map(esc).join('、') : '无'}<br>
+      · 将新建员工：${r.newStaff.length ? r.newStaff.map(esc).join('、') : '无'}；新建仓位：${r.newLocations.length ? r.newLocations.map(esc).join('、') : '无'}；新建历史原因（不进新建下拉）：${r.newReasons?.length ? r.newReasons.map(esc).join('、') : '无'}<br>
       · 原因分布：${r.reasons.slice(0, 6).map(([n, c]) => `${esc(n)}×${c}`).join('、')}${r.reasons.length > 6 ? '…' : ''}
       ${r.duplicateBarcodesInCatalog.length ? `<br>· ⚠️ 目录中重复条码（取第一个匹配）：${r.duplicateBarcodesInCatalog.slice(0, 5).map(esc).join('、')}` : ''}
     </div>`;
