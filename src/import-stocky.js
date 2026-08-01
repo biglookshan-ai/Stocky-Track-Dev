@@ -355,10 +355,14 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
       // Historical reason labels (e.g. 'Stocky Stocktakes') are preserved but
       // created inactive so they don't appear in the new-adjustment dropdown.
       const r = await client.query(
+        // Imported reasons come in ACTIVE, forming the live base the user then
+        // curates (rename / change direction / deactivate) in the UI. Direction
+        // is inferred from Stocky's prefix convention (- decrease, + increase).
         `INSERT INTO adjustment_reasons (name, direction, active, position)
-         VALUES ($1, 'any', false, 999)
+         VALUES ($1, $2, true, 999)
          ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
-         RETURNING id`, [name.trim()]);
+         RETURNING id`,
+        [name.trim(), name.trim().startsWith('-') ? 'out' : name.trim().startsWith('+') ? 'in' : 'any']);
       lookups.reasonByName.set(name.trim().toLowerCase(), r.rows[0].id);
     }
     for (const name of newLocations) {
@@ -367,9 +371,11 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
       lookups.locByName.set(name.toLowerCase(), r.rows[0].id);
     }
     for (const name of newStaff) {
+      // Imported staff are ACTIVE — the historical team roster becomes the live
+      // employee source for new adjustments (selectable as recorded/handled by).
       const r = await client.query(
         `INSERT INTO staff (shopify_user_id, display_name, role, active)
-         VALUES (NULL, $1, 'member', false) RETURNING id`, [name]);
+         VALUES (NULL, $1, 'member', true) RETURNING id`, [name]);
       lookups.staffByName.set(name.toLowerCase(), r.rows[0].id);
     }
     for (const [barcode, sample] of unmatchedBarcodes) {
