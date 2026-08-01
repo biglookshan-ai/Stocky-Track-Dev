@@ -371,6 +371,15 @@ async function viewDashboard() {
         <span class="muted">${backfill ? backfill.running ? `⏳ 历史回填中… 已读取 ${backfill.fetched || 0} 行` : backfill.error ? `❌ ${esc(backfill.error)}` : `历史回填完成 ${fmtDate(backfill.finishedAt)}：新增 ${backfill.inserted || 0}` : '尚未回填'}
         ${history?.finishedAt ? ` · 信息补全 ${fmtDate(history.finishedAt)}` : ''}</span>
       </div>
+      <div class="row" style="align-items:flex-start;flex-direction:column;gap:6px">
+        <strong>导入 Stocky 历史调整（CSV）</strong>
+        <div class="row">
+          <input type="file" id="stocky-csv" accept=".csv,text/csv">
+          <button id="btn-stocky-dry" class="secondary">① 预检（只分析不写入）</button>
+          <button id="btn-stocky-commit" disabled>② 确认导入</button>
+        </div>
+        <div id="stocky-report" class="muted small"></div>
+      </div>
       <p class="muted compact">这些工具仅用于安装、恢复或手动刷新；日常使用无需点击。</p>
     </details>
     <div class="notice"><strong>历史范围说明：</strong>Shopify 商品 Adjustment history 页面提供最近 180 天。本应用会永久保存已经采集或导入的记录；要补齐更早的 Stocky 历史，需要后续导入 Stocky 导出文件。</div>`;
@@ -426,6 +435,47 @@ async function viewDashboard() {
   $('#btn-history').onclick = guard(async () => {
     await api('/jobs/history?days=180', { method: 'POST' });
     setTimeout(viewDashboard, 1500);
+  });
+
+  // Stocky legacy CSV import: dry-run report first, explicit second click to commit.
+  const stockyReport = (r, committed) => `
+    <div class="notice" style="margin-top:6px">
+      ${committed ? `<strong>✅ 导入完成：</strong>新增 ${committed.eventsInserted} 个事件、${committed.linesInserted} 行明细、${committed.itemsCreated} 个本地商品。<br>` : ''}
+      <strong>预检报告</strong>（CSV ${r.totalCsvRows} 行）<br>
+      · 将导入：<strong>${r.eventsToImport}</strong> 张调整单 / ${r.linesToImport} 行（${r.dateRange ? `${r.dateRange.first.slice(0, 10)} → ${r.dateRange.last.slice(0, 10)}` : '—'}）<br>
+      · 跳过（${r.coverageStart ? r.coverageStart.slice(0, 10) : '—'} 起已有正式记录）：${r.skippedAlreadyCovered.groups} 单 / ${r.skippedAlreadyCovered.rows} 行<br>
+      · 跳过（Stocky 中未执行 not_adjusted/failed）：${r.skippedNotAdjustedRows} 行；缺日期单：${r.missingDateGroups.length}；缺条码行：${r.missingBarcodeRows}<br>
+      · 将新建本地商品（Stocky 内部 # 产品）：${r.localItemsToCreate} 个${r.localItemSamples.length ? `，如 ${r.localItemSamples.slice(0, 3).map((s) => esc(s.product)).join('、')}` : ''}<br>
+      · 将新建员工：${r.newStaff.length ? r.newStaff.map(esc).join('、') : '无'}；新建仓位：${r.newLocations.length ? r.newLocations.map(esc).join('、') : '无'}<br>
+      · 原因分布：${r.reasons.slice(0, 6).map(([n, c]) => `${esc(n)}×${c}`).join('、')}${r.reasons.length > 6 ? '…' : ''}
+      ${r.duplicateBarcodesInCatalog.length ? `<br>· ⚠️ 目录中重复条码（取第一个匹配）：${r.duplicateBarcodesInCatalog.slice(0, 5).map(esc).join('、')}` : ''}
+    </div>`;
+  const readStockyFile = () => new Promise((resolve, reject) => {
+    const f = $('#stocky-csv').files[0];
+    if (!f) return reject(new Error('请先选择 Stocky 导出的 CSV 文件'));
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('文件读取失败'));
+    reader.readAsText(f);
+  });
+  $('#btn-stocky-dry').onclick = guard(async (e) => {
+    const text = await readStockyFile();
+    $('#stocky-report').innerHTML = '预检中…';
+    const { report } = await api('/import/stocky?mode=dry-run', {
+      method: 'POST', body: text, headers: { 'Content-Type': 'text/csv' },
+    });
+    $('#stocky-report').innerHTML = stockyReport(report);
+    $('#btn-stocky-commit').disabled = false;
+    e.target.disabled = false;
+  });
+  $('#btn-stocky-commit').onclick = guard(async (e) => {
+    if (!confirm('确认把预检通过的 Stocky 历史调整写入账本？（幂等，可重复执行）')) { e.target.disabled = false; return; }
+    const text = await readStockyFile();
+    $('#stocky-report').innerHTML = '导入中…（几十秒）';
+    const result = await api('/import/stocky?mode=commit', {
+      method: 'POST', body: text, headers: { 'Content-Type': 'text/csv' },
+    });
+    $('#stocky-report').innerHTML = stockyReport(result.report, result);
   });
 }
 

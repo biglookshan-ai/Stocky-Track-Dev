@@ -16,6 +16,7 @@ import {
 } from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
+import { runStockyImport } from './import-stocky.js';
 import {
   groupAuditEvents,
   mergeNearbyProvisionalEvents,
@@ -391,6 +392,16 @@ api.get('/setup/webhooks', async (req, res) => {
   try {
     res.json({ subscriptions: await listSubscriptions({ shop: req.ctx.shop, token: req.ctx.token }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stocky legacy CSV import: dry-run returns the mapping report; commit writes.
+// The client re-sends the same file for commit; both are idempotent.
+api.post('/import/stocky', express.text({ type: '*/*', limit: '30mb' }), async (req, res) => {
+  try {
+    const commit = String(req.query.mode || 'dry-run') === 'commit';
+    const result = await runStockyImport(req.body, { commit });
+    res.json(result);
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Manual triggers (also run on schedule) — useful during M0 verification.
@@ -809,7 +820,7 @@ api.get('/items/:id/trend', async (req, res) => {
          FROM inventory_ledger lg
          LEFT JOIN inventory_events ev ON ev.id=lg.event_id
          WHERE lg.item_id=$1 AND lg.state=$2
-           AND lg.source_type <> 'reconciliation'
+           AND lg.source_type NOT IN ('reconciliation', 'import')
            AND (ev.id IS NULL OR ${formalEvent('ev')})${ledgerLocationClause}`, baseArgs),
       locationId
         ? q('SELECT name FROM locations WHERE id=$1', [locationId])
@@ -838,7 +849,7 @@ api.get('/items/:id/trend', async (req, res) => {
           LEFT JOIN inventory_events ev ON ev.id=lg.event_id
           JOIN locations loc ON loc.id=lg.location_id
           WHERE lg.item_id=$1 AND lg.state=$2
-            AND lg.source_type <> 'reconciliation'
+            AND lg.source_type NOT IN ('reconciliation', 'import')
             AND (ev.id IS NULL OR ${formalEvent('ev')})${ledgerLocationClause}
             AND lg.occurred_at >= ${fromParam}
         )
@@ -1017,7 +1028,7 @@ api.get('/items/:id/history', async (req, res) => {
         GROUP BY lg.event_id, lg.location_id, lg.state
       )
       SELECT s.event_id, states.state, COALESCE(c.delta, 0)::int AS delta,
-             COALESCE(c.qty_after,
+             CASE WHEN e.source_type='import' THEN NULL ELSE COALESCE(c.qty_after,
                (CASE states.state
                  WHEN 'available' THEN cl.available
                  WHEN 'on_hand' THEN cl.on_hand
@@ -1037,7 +1048,7 @@ api.get('/items/:id/history', async (req, res) => {
                    AND (newer_event.occurred_at > e.occurred_at
                      OR (newer_event.occurred_at=e.occurred_at AND newer_event.id > e.id))
                ), 0)
-             )::int AS computed_qty_after,
+             ) END::int AS computed_qty_after,
              e.occurred_at, c.reason_code, c.source_type, c.actor_name, c.app_name,
              c.reference_document_uri, loc.name AS location,
              e.occurred_at AS event_occurred_at, e.activity, e.reason AS event_reason,

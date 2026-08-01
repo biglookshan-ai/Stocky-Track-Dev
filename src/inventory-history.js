@@ -107,6 +107,24 @@ export function groupAuditEvents(rows, levels = []) {
   ]));
   const states = ['available', 'on_hand', 'committed', 'incoming', 'reserved', 'damaged', 'safety_stock', 'quality_control'];
   for (const event of events.values()) {
+    // Imported legacy events (Stocky CSV) predate tracking: reconstructing
+    // their qty_after from current values would fabricate numbers (the sales
+    // of that era are not in the ledger). Show deltas only, and leave the
+    // walking baseline untouched.
+    if (event.source_type === 'import') {
+      for (const state of states) {
+        const change = event.changes[state];
+        if (change) change.qty_after = null;
+        else event.changes[state] = { delta: 0, qty_after: null };
+      }
+      const available = event.changes.available;
+      const onHand = event.changes.on_hand;
+      event.changes.unavailable = {
+        delta: (onHand?.delta || 0) - (available?.delta || 0),
+        qty_after: null,
+      };
+      continue;
+    }
     const tracked = trackedByLocation.get(event.location) || {};
     for (const state of states) {
       const change = event.changes[state];
