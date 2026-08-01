@@ -447,7 +447,7 @@ async function viewDashboard() {
       · 跳过（Stocky 中未执行 not_adjusted/failed）：${r.skippedNotAdjustedRows} 行；缺日期单：${r.missingDateGroups.length}；缺条码行：${r.missingBarcodeRows}<br>
       · 将新建本地商品（Stocky 内部 # 产品）：${r.localItemsToCreate} 个${r.localItemSamples.length ? `，如 ${r.localItemSamples.slice(0, 3).map((s) => esc(s.product)).join('、')}` : ''}<br>
       · 将新建员工：${r.newStaff.length ? r.newStaff.map(esc).join('、') : '无'}；新建仓位：${r.newLocations.length ? r.newLocations.map(esc).join('、') : '无'}；新建历史原因（不进新建下拉）：${r.newReasons?.length ? r.newReasons.map(esc).join('、') : '无'}<br>
-      · 原因分布：${r.reasons.slice(0, 6).map(([n, c]) => `${esc(n)}×${c}`).join('、')}${r.reasons.length > 6 ? '…' : ''}
+      ${r.coveredMapping ? `· 重叠期（已有正式记录）：${r.coveredMapping.matched} 单匹配成功→回填操作人/备注到现有记录；${r.coveredMapping.unmatched} 单未匹配、${r.coveredMapping.ambiguous} 单有歧义（这些只建 STK 档案、不动现有记录）<br>` : ''}      · 原因分布：${r.reasons.slice(0, 6).map(([n, c]) => `${esc(n)}×${c}`).join('、')}${r.reasons.length > 6 ? '…' : ''}
       ${r.duplicateBarcodesInCatalog.length ? `<br>· ⚠️ 目录中重复条码（取第一个匹配）：${r.duplicateBarcodesInCatalog.slice(0, 5).map(esc).join('、')}` : ''}
     </div>`;
   const readStockyFile = () => new Promise((resolve, reject) => {

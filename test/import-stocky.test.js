@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee, mergeAdjustmentLines } from '../src/import-stocky.js';
+import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee, mergeAdjustmentLines, pickCoveringEvent } from '../src/import-stocky.js';
 
 test('parseCsv: quotes, embedded commas, newlines and CRLF', () => {
   const rows = parseCsv('a,b,c\r\n1,"x, y","line1\nline2"\r\n2,"he said ""hi""",z\n');
@@ -97,4 +97,42 @@ test('mergeAdjustmentLines: nets to zero rows are dropped', () => {
     { barcode: 'a', location: 'Shop', delta: -1 },
     { barcode: 'a', location: 'Shop', delta: 1 },
   ]), []);
+});
+
+test('pickCoveringEvent: single common event across all lines', () => {
+  assert.deepEqual(
+    pickCoveringEvent([new Set(['7', '8']), new Set(['7'])]),
+    { eventId: '7', ambiguous: false },
+  );
+});
+
+test('pickCoveringEvent: empty candidate for any line → unmatched', () => {
+  assert.deepEqual(
+    pickCoveringEvent([new Set(['7']), new Set()]),
+    { eventId: null, ambiguous: false },
+  );
+});
+
+test('pickCoveringEvent: multiple common events → ambiguous, never guesses', () => {
+  assert.deepEqual(
+    pickCoveringEvent([new Set(['7', '8']), new Set(['7', '8'])]),
+    { eventId: null, ambiguous: true },
+  );
+});
+
+test('pickCoveringEvent: disjoint sets → unmatched', () => {
+  assert.deepEqual(
+    pickCoveringEvent([new Set(['7']), new Set(['8'])]),
+    { eventId: null, ambiguous: false },
+  );
+});
+
+test('planImport: covered groups routed to coveredEvents, not dropped', () => {
+  const plan = planImport(
+    [row(), row({ 'No.': '3000', _line: 3, Date: '01/03/2026' })],
+    { coverageStart: '2026-01-29T00:00:00Z' },
+  );
+  assert.equal(plan.events.length, 1);
+  assert.equal(plan.coveredEvents.length, 1);
+  assert.equal(plan.coveredEvents[0].number, '3000');
 });

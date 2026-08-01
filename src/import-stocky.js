@@ -32,6 +32,24 @@ export function mergeAdjustmentLines(lines) {
   return [...merged.values()].filter((l) => l.delta !== 0);
 }
 
+// ---- pure: pick the single formal event that covers every CSV line ----
+// candidateSets: per CSV line, the Set of formal event ids whose ledger rows
+// match that line (same item/location/delta, date window, app Stocky).
+// Returns the event id only when the intersection is unambiguous.
+export function pickCoveringEvent(candidateSets) {
+  if (!candidateSets.length) return { eventId: null, ambiguous: false };
+  let intersection = null;
+  for (const set of candidateSets) {
+    if (!set || !set.size) return { eventId: null, ambiguous: false };
+    intersection = intersection === null
+      ? new Set(set)
+      : new Set([...intersection].filter((id) => set.has(id)));
+    if (!intersection.size) return { eventId: null, ambiguous: false };
+  }
+  if (intersection.size === 1) return { eventId: [...intersection][0], ambiguous: false };
+  return { eventId: null, ambiguous: true };
+}
+
 // ---- pure: RFC-4180 CSV ----
 export function parseCsv(text) {
   const src = String(text || '').replace(/^﻿/, '');
@@ -99,6 +117,7 @@ export function planImport(rows, { coverageStart = null } = {}) {
   }
 
   const events = [];
+  const coveredEvents = []; // formal history already exists → enrich, not insert
   const employees = new Map(); // lower → {name, count}
   const reasons = new Map();
   for (const group of groups.values()) {
@@ -111,10 +130,10 @@ export function planImport(rows, { coverageStart = null } = {}) {
       issues.missingDateGroups.push(group.number);
       continue;
     }
-    if (coverageStart && +new Date(date) >= +new Date(coverageStart)) {
+    const covered = coverageStart && +new Date(date) >= +new Date(coverageStart);
+    if (covered) {
       issues.coveredGroups++;
       issues.coveredRows += adjusted.length;
-      continue;
     }
 
     const tally = new Map();
@@ -152,7 +171,7 @@ export function planImport(rows, { coverageStart = null } = {}) {
     }
     if (!lines.length) continue;
     const staffKey = [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-    events.push({
+    (covered ? coveredEvents : events).push({
       number: group.number,
       occurredAt: date,
       reason,
@@ -164,6 +183,7 @@ export function planImport(rows, { coverageStart = null } = {}) {
   events.sort((a, b) => +new Date(a.occurredAt) - +new Date(b.occurredAt) || Number(a.number) - Number(b.number));
   return {
     events,
+    coveredEvents,
     issues,
     reasons: [...reasons.entries()].sort((a, b) => b[1] - a[1]),
     employees: [...employees.values()].map((e) => e.name).sort(),
@@ -200,6 +220,63 @@ async function loadLookups(plan) {
   const reasons = await q('SELECT id, name FROM adjustment_reasons');
   const reasonByName = new Map(reasons.rows.map((r) => [r.name.trim().toLowerCase(), r.id]));
   return { itemByBarcode, dupBarcodes: [...dupBarcodes], locByName, staffByName, reasonByName, barcodes };
+}
+
+// Match a covered-era CSV group to the formal event that already records it,
+// then (in commit mode) enrich that event with the CSV's employee/notes and
+// create the STK adjustment record linked to it. exec = q (dry-run) or a
+// transaction client's query fn (commit).
+async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
+  const resolved = [];
+  for (const l of e.lines) {
+    const itemId = lookups.itemByBarcode.get(l.barcode);
+    const locationId = lookups.locByName.get(l.location.toLowerCase());
+    if (!itemId || !locationId) return { status: 'unmatched' };
+    resolved.push({ ...l, itemId, locationId });
+  }
+  const candidateSets = [];
+  const rowsByLine = [];
+  for (const l of resolved) {
+    const rows = await exec(`
+      SELECT lg.id AS ledger_id, lg.event_id, e.shopify_group_gid
+      FROM inventory_ledger lg
+      JOIN inventory_events e ON e.id=lg.event_id
+      WHERE lg.item_id=$1 AND lg.location_id=$2 AND lg.state='available' AND lg.delta=$3
+        AND lg.occurred_at BETWEEN $4::timestamptz - interval '36 hours'
+                               AND $4::timestamptz + interval '36 hours'
+        AND e.source_type <> 'import'
+        AND NOT (e.source_type='unknown' AND e.shopify_group_gid LIKE 'webhook:%')
+        AND e.app_name ILIKE '%stocky%'`,
+    [l.itemId, l.locationId, l.delta, e.occurredAt]);
+    candidateSets.push(new Set(rows.rows.map((r) => String(r.event_id))));
+    rowsByLine.push(rows.rows);
+  }
+  const pick = pickCoveringEvent(candidateSets);
+  if (!pick.eventId) return { status: pick.ambiguous ? 'ambiguous' : 'unmatched' };
+  const eventGid = rowsByLine.flat().find((r) => String(r.event_id) === pick.eventId)?.shopify_group_gid;
+  if (claimedGids.has(pick.eventId)) return { status: 'ambiguous' };
+  claimedGids.add(pick.eventId);
+  if (!commit) return { status: 'matched', eventGid };
+
+  await exec(
+    `UPDATE inventory_events SET staff_name = COALESCE(staff_name, $2)
+     WHERE id=$1`, [pick.eventId, e.staffName]);
+  for (let i = 0; i < resolved.length; i++) {
+    const l = resolved[i];
+    const ledgerRow = rowsByLine[i].find((r) => String(r.event_id) === pick.eventId);
+    if (!ledgerRow) continue;
+    await exec(
+      `UPDATE inventory_ledger SET
+         notes = COALESCE(notes, $2),
+         reason_code = COALESCE(reason_code, $3),
+         actor_name = COALESCE(actor_name, $4),
+         staff_id = COALESCE(staff_id, $5)
+       WHERE id=$1`,
+      [ledgerRow.ledger_id, l.notes, e.reason,
+        l.employee || e.staffName,
+        l.employee ? lookups.staffByName.get(l.employee.toLowerCase()) || null : null]);
+  }
+  return { status: 'matched', eventGid };
 }
 
 export async function runStockyImport(csvText, { commit = false } = {}) {
@@ -243,13 +320,32 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
     newStaff,
     newLocations,
     newReasons,
-    adjustmentsToCreate: plan.events.length,
+    adjustmentsToCreate: plan.events.length + plan.coveredEvents.length,
     localItemsToCreate: unmatchedBarcodes.size,
     localItemSamples: [...unmatchedBarcodes.values()].slice(0, 10)
       .map((l) => ({ barcode: l.barcode, sku: l.sku, product: l.product || '(无标题)' })),
     duplicateBarcodesInCatalog: lookups.dupBarcodes.slice(0, 20),
   };
-  if (!commit) return { dryRun: true, report };
+
+  if (!commit) {
+    // Read-only pass: how many covered-era groups map onto existing formal
+    // records (their reason/employee/notes will be back-filled on commit).
+    const claimed = new Set();
+    const mapStats = { matched: 0, unmatched: [], ambiguous: [] };
+    for (const e of plan.coveredEvents) {
+      const r = await mapCoveredEvent(e, lookups, q, claimed, { commit: false });
+      if (r.status === 'matched') mapStats.matched++;
+      else mapStats[r.status].push(e.number);
+    }
+    report.coveredMapping = {
+      matched: mapStats.matched,
+      unmatched: mapStats.unmatched.length,
+      unmatchedSamples: mapStats.unmatched.slice(0, 10),
+      ambiguous: mapStats.ambiguous.length,
+      ambiguousSamples: mapStats.ambiguous.slice(0, 10),
+    };
+    return { dryRun: true, report };
+  }
 
   const client = await pool.connect();
   let eventsInserted = 0, linesInserted = 0, itemsCreated = 0, adjustmentsCreated = 0;
@@ -321,11 +417,12 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
         if (r.rowCount) linesInserted++;
       }
     }
-    // The same groups become adjustment records in the 库存调整 workspace:
+    // Every group also becomes an adjustment record in the 库存调整 workspace:
     // original Stocky number as display_number 'STK-xxxx' (number stays NULL so
     // the app's own sequence is untouched), original reason/staff/notes, one
     // merged line per item+location, recorded_by + handled_by participants.
-    for (const e of plan.events) {
+    // linkGid ties the record to the event that carries it in 修改记录.
+    const createStk = async (e, linkGid) => {
       const adj = await client.query(
         `INSERT INTO adjustments
            (number, display_number, reason_id, staff_id, created_by_staff_id,
@@ -337,9 +434,9 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
           `STK-${e.number}`,
           e.reason ? lookups.reasonByName.get(e.reason.trim().toLowerCase()) || null : null,
           e.staffName ? lookups.staffByName.get(e.staffName.toLowerCase()) || null : null,
-          e.notes, e.occurredAt, `stocky:adjustment:${e.number}`,
+          e.notes, e.occurredAt, linkGid,
         ]);
-      if (!adj.rowCount) continue; // already imported
+      if (!adj.rowCount) return false; // already imported
       const adjustmentId = adj.rows[0].id;
       adjustmentsCreated++;
       if (e.staffName) {
@@ -367,7 +464,33 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
            ON CONFLICT (adjustment_id, item_id, location_id) DO NOTHING`,
           [adjustmentId, itemId, locationId, l.delta]);
       }
+      return true;
+    };
+
+    for (const e of plan.events) {
+      await createStk(e, `stocky:adjustment:${e.number}`);
     }
+
+    // Covered era: match onto the existing formal record, back-fill its
+    // employee/notes/reason, and link the STK record to that same event.
+    // Unmatched/ambiguous groups still get their STK archive record (with a
+    // standalone link id) but no formal record is touched.
+    const claimed = new Set();
+    const covered = { matched: 0, unmatched: [], ambiguous: [] };
+    const exec = (text, params) => client.query(text, params);
+    for (const e of plan.coveredEvents) {
+      const r = await mapCoveredEvent(e, lookups, exec, claimed, { commit: true });
+      if (r.status === 'matched') covered.matched++;
+      else covered[r.status].push(e.number);
+      await createStk(e, r.eventGid || `stocky:adjustment:${e.number}`);
+    }
+    report.coveredMapping = {
+      matched: covered.matched,
+      unmatched: covered.unmatched.length,
+      unmatchedSamples: covered.unmatched.slice(0, 10),
+      ambiguous: covered.ambiguous.length,
+      ambiguousSamples: covered.ambiguous.slice(0, 10),
+    };
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');

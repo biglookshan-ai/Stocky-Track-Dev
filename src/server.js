@@ -157,7 +157,7 @@ const AWAITING_FORMAL_SQL = `
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {
   try {
-    const [webhooks, pending, latestFormal, snap, historySync, historyBackfill] = await Promise.all([
+    const [webhooks, pending, latestFormal, snap, historySync, historyBackfill, stockyImport] = await Promise.all([
       q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
                 count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
                 max(received_at) AS last_received_at,
@@ -169,6 +169,7 @@ app.get('/healthz', async (req, res) => {
       getState('last_snapshot'),
       getState('inventory_history_sync'),
       getState('inventory_history_backfill'),
+      getState('stocky_import'),
     ]);
     res.json({
       ok: true,
@@ -182,6 +183,15 @@ app.get('/healthz', async (req, res) => {
       historyBackfill: historyBackfill && {
         running: historyBackfill.running, cursor: historyBackfill.cursor,
         error: historyBackfill.error || null, heartbeat: historyBackfill.heartbeat,
+      },
+      stockyImport: stockyImport && {
+        startedAt: stockyImport.startedAt, finishedAt: stockyImport.finishedAt,
+        error: stockyImport.error || null,
+        adjustmentsCreated: stockyImport.adjustmentsCreated,
+        eventsInserted: stockyImport.eventsInserted,
+        linesInserted: stockyImport.linesInserted,
+        itemsCreated: stockyImport.itemsCreated,
+        coveredMapping: stockyImport.report?.coveredMapping || null,
       },
       lastSnapshot: snap,
     });
@@ -1430,6 +1440,33 @@ initDb().then(() => {
       if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s) at startup`);
     })
     .catch((e) => console.error('[history] startup placeholder cleanup:', e.message));
+  // One-shot Stocky legacy import: runs once at startup when the bundled CSV
+  // exists and the import has not been recorded yet. Idempotent at every level
+  // (event gid / change id / display_number), so a crash mid-run just resumes
+  // on the next boot. Remove data/stocky-adjustments.csv after verification.
+  (async () => {
+    const csvPath = path.join(ROOT, 'data', 'stocky-adjustments.csv');
+    if (!fs.existsSync(csvPath)) return;
+    const done = await getState('stocky_import');
+    if (done?.finishedAt) return;
+    console.log('[stocky-import] starting one-shot legacy import…');
+    await setState('stocky_import', { startedAt: new Date().toISOString() });
+    try {
+      const result = await runStockyImport(fs.readFileSync(csvPath, 'utf8'), { commit: true });
+      await setState('stocky_import', {
+        finishedAt: new Date().toISOString(),
+        adjustmentsCreated: result.adjustmentsCreated,
+        eventsInserted: result.eventsInserted,
+        linesInserted: result.linesInserted,
+        itemsCreated: result.itemsCreated,
+        report: result.report,
+      });
+      console.log(`[stocky-import] done: ${result.adjustmentsCreated} adjustments, ${result.linesInserted} ledger lines`);
+    } catch (e) {
+      console.error('[stocky-import] failed:', e.message);
+      await setState('stocky_import', { error: e.message, failedAt: new Date().toISOString() });
+    }
+  })().catch((e) => console.error('[stocky-import]', e.message));
   resumeInterruptedHistory().catch(async (e) => {
     console.error('[history] resume failed:', e.message);
     const state = await getState('inventory_history_backfill').catch(() => ({}));
