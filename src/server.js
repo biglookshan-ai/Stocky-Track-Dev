@@ -157,7 +157,7 @@ const AWAITING_FORMAL_SQL = `
 // ---- Health (public, for Railway + monitoring) ----
 app.get('/healthz', async (req, res) => {
   try {
-    const [webhooks, pending, latestFormal, snap, historySync, historyBackfill, stockyImport] = await Promise.all([
+    const [webhooks, pending, latestFormal, snap, historySync, historyBackfill, stockyImport, stkAdj] = await Promise.all([
       q(`SELECT count(*) FILTER (WHERE processed_at IS NULL)::int AS backlog,
                 count(*) FILTER (WHERE error IS NOT NULL)::int AS errors,
                 max(received_at) AS last_received_at,
@@ -170,9 +170,15 @@ app.get('/healthz', async (req, res) => {
       getState('inventory_history_sync'),
       getState('inventory_history_backfill'),
       getState('stocky_import'),
+      q(`SELECT count(*)::int total,
+                count(*) FILTER (WHERE NOT EXISTS
+                  (SELECT 1 FROM adjustment_lines al WHERE al.adjustment_id=a.id))::int empty
+         FROM adjustments a WHERE display_number LIKE 'STK-%'`),
     ]);
     res.json({
       ok: true,
+      stkAdjustments: stkAdj.rows[0],
+      stockyImportVersion: (stockyImport || {}).version || null,
       webhookBacklog: webhooks.rows[0].backlog,
       webhookErrors: webhooks.rows[0].errors,
       lastWebhookReceivedAt: webhooks.rows[0].last_received_at,
