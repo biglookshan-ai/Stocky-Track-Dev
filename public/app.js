@@ -183,10 +183,10 @@ const gidParts = (uri) => {
   return match ? { type: match[1], id: match[2] } : null;
 };
 const referenceCell = (row, shopHandle) => {
-  // A manual adjustment (imported or app-created) links to its detail page here.
+  // A manual adjustment (imported or app-created) links to its detail page,
+  // labelled with the SAME number the list/detail pages show (display_number).
   if (row.adjustment_id) {
-    const no = row.reference_document_id ? `#${esc(row.reference_document_id)}` : '调整单';
-    return `<a href="#/adjustments/${row.adjustment_id}">调整单 ${no}</a>`;
+    return `<a href="#/adjustments/${row.adjustment_id}">调整单 ${adjustmentNumber(row.adjustment_number, row.adjustment_display_number)}</a>`;
   }
   const ref = gidParts(row.reference_document_uri);
   const type = row.reference_document_type || ref?.type;

@@ -1106,10 +1106,12 @@ api.get('/items/:id/history', async (req, res) => {
              e.reference_document_type AS event_reference_type,
              e.reference_document_id AS event_reference_id,
              e.source_type AS event_source_type,
-             (SELECT a.id FROM adjustments a
-              WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_id
+             adj.id AS adjustment_id, adj.number AS adjustment_number,
+             adj.display_number AS adjustment_display_number
       FROM selected s
       JOIN inventory_events e ON e.id=s.event_id
+      LEFT JOIN LATERAL (SELECT id, number, display_number FROM adjustments a
+        WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) adj ON true
       JOIN locations loc ON loc.id=s.location_id
       -- LEFT JOIN: deleted/local products have no current_levels row, but their
       -- historical adjustments must still be listed (qty_after just stays null).
@@ -1232,6 +1234,10 @@ async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
               min(i.vendor) AS vendor,
               (SELECT a.id FROM adjustments a
                WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_id,
+              (SELECT a.number FROM adjustments a
+               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_number,
+              (SELECT a.display_number FROM adjustments a
+               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_display_number,
               string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
        FROM inventory_events e
        JOIN inventory_ledger lg ON lg.event_id=e.id
@@ -1308,7 +1314,12 @@ api.get('/history/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const [event, lines] = await Promise.all([
-      q(`SELECT * FROM inventory_events WHERE id=$1`, [id]),
+      q(`SELECT e.*, adj.id AS adjustment_id, adj.number AS adjustment_number,
+                adj.display_number AS adjustment_display_number
+         FROM inventory_events e
+         LEFT JOIN LATERAL (SELECT id, number, display_number FROM adjustments a
+           WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) adj ON true
+         WHERE e.id=$1`, [id]),
       q(`SELECT i.id AS item_id, i.product_title, i.variant_title,
                 i.barcode, i.sku, i.vendor, loc.name AS location,
                 sum(lg.delta) FILTER (WHERE lg.state='unavailable')::int AS direct_unavailable_delta,
