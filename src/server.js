@@ -1447,21 +1447,26 @@ initDb().then(() => {
       if (merged) console.log(`[history] merged ${merged} delayed webhook placeholder(s) at startup`);
     })
     .catch((e) => console.error('[history] startup placeholder cleanup:', e.message));
-  // One-shot Stocky legacy import: runs once at startup when the bundled CSV
-  // exists and the import has not been recorded yet. Idempotent at every level
-  // (event gid / change id / display_number), so a crash mid-run just resumes
-  // on the next boot. Remove data/stocky-adjustments.csv after verification.
+  // One-shot Stocky legacy import: runs at startup from the bundled CSV. Keyed
+  // by STOCKY_IMPORT_VERSION — bumping it (after an importer fix) triggers a
+  // clean undo of the previous run and a fresh re-import, so bug fixes to the
+  // mapping self-heal on deploy. Precise undo never touches Shopify data.
   (async () => {
+    const STOCKY_IMPORT_VERSION = 2; // v2: local items for covered-era orphan barcodes
     const csvPath = path.join(ROOT, 'data', 'stocky-adjustments.csv');
     if (!fs.existsSync(csvPath)) return;
     const done = await getState('stocky_import');
-    if (done?.finishedAt) return;
-    console.log('[stocky-import] starting one-shot legacy import…');
-    await setState('stocky_import', { startedAt: new Date().toISOString() });
+    if (done?.finishedAt && done?.version === STOCKY_IMPORT_VERSION) return;
     try {
+      if (done?.finishedAt && done?.version !== STOCKY_IMPORT_VERSION) {
+        console.log(`[stocky-import] version ${done.version || 1} → ${STOCKY_IMPORT_VERSION}: undoing then re-importing…`);
+        await undoStockyImport();
+      }
+      console.log('[stocky-import] starting legacy import…');
+      await setState('stocky_import', { startedAt: new Date().toISOString(), version: STOCKY_IMPORT_VERSION });
       const result = await runStockyImport(fs.readFileSync(csvPath, 'utf8'), { commit: true });
       await setState('stocky_import', {
-        finishedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(), version: STOCKY_IMPORT_VERSION,
         adjustmentsCreated: result.adjustmentsCreated,
         eventsInserted: result.eventsInserted,
         linesInserted: result.linesInserted,

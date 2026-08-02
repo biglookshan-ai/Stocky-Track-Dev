@@ -305,15 +305,19 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   const plan = planImport(rows, { coverageStart });
   const lookups = await loadLookups(plan);
 
+  // Both eras need local items/locations for orphan barcodes, otherwise a
+  // covered-era adjustment referencing a since-deleted product would be created
+  // with no lines (the product would silently vanish from the record).
+  const allEvents = [...plan.events, ...plan.coveredEvents];
   const unmatchedBarcodes = new Map(); // barcode → sample line info (→ local item)
-  for (const e of plan.events) {
+  for (const e of allEvents) {
     for (const l of e.lines) {
       if (!lookups.itemByBarcode.has(l.barcode) && !unmatchedBarcodes.has(l.barcode)) {
         unmatchedBarcodes.set(l.barcode, l);
       }
     }
   }
-  const newLocations = [...new Set(plan.events.flatMap((e) => e.lines.map((l) => l.location)))]
+  const newLocations = [...new Set(allEvents.flatMap((e) => e.lines.map((l) => l.location)))]
     .filter((n) => n && !lookups.locByName.has(n.toLowerCase()));
   const newStaff = plan.employees.filter((n) => !lookups.staffByName.has(n.toLowerCase()));
   const newReasons = plan.reasons
@@ -528,7 +532,7 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
 // Shopify or a manual edit provided). Idempotent — safe to run twice.
 export async function undoStockyImport() {
   const client = await pool.connect();
-  const result = { revertedBackfillRows: 0, deletedAdjustments: 0, deletedEvents: 0, deletedLedgerRows: 0, deactivatedLocalItems: 0 };
+  const result = { revertedBackfillRows: 0, deletedAdjustments: 0, deletedEvents: 0, deletedLedgerRows: 0, deletedLocalItems: 0 };
   try {
     await client.query('BEGIN');
 
@@ -563,14 +567,16 @@ export async function undoStockyImport() {
       `DELETE FROM inventory_events WHERE source_type='import' AND shopify_group_gid LIKE 'stocky:%'`);
     result.deletedEvents = delEvents.rowCount;
 
-    // 4. Local items created by the import that now have no ledger history at all
-    //    are deactivated (not hard-deleted — a later import/adjustment may use
-    //    them, and deactivation is reversible).
-    const deact = await client.query(
-      `UPDATE items SET status='archived' WHERE source='local'
+    // 4. Local items the import created that now have NO references anywhere
+    //    (all their ledger rows and adjustment lines are gone) are removed, so a
+    //    later re-import recreates them fresh and active. A local item still
+    //    referenced by a manually-created adjustment is kept untouched.
+    const del = await client.query(
+      `DELETE FROM items WHERE source='local'
          AND NOT EXISTS (SELECT 1 FROM inventory_ledger lg WHERE lg.item_id=items.id)
-         AND NOT EXISTS (SELECT 1 FROM adjustment_lines al WHERE al.item_id=items.id)`);
-    result.deactivatedLocalItems = deact.rowCount;
+         AND NOT EXISTS (SELECT 1 FROM adjustment_lines al WHERE al.item_id=items.id)
+         AND NOT EXISTS (SELECT 1 FROM current_levels cl WHERE cl.item_id=items.id)`);
+    result.deletedLocalItems = del.rowCount;
 
     // 5. Clear the one-shot flag so the import can be re-run.
     await client.query(`DELETE FROM sync_state WHERE key='stocky_import'`);

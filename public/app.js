@@ -483,7 +483,7 @@ async function viewDashboard() {
     if (!confirm('撤销 Stocky 导入？将删除所有 STK 调整单和导入的历史记录，并把回填的操作人/备注清回原样。此操作可逆——之后可重新导入。')) { e.target.disabled = false; return; }
     $('#stocky-report').innerHTML = '撤销中…';
     const r = await api('/import/stocky/undo', { method: 'POST' });
-    $('#stocky-report').innerHTML = `<div class="notice">✅ 已撤销：删除 ${r.deletedAdjustments} 张 STK 单、${r.deletedEvents} 个历史事件、${r.deletedLedgerRows} 行明细；回退 ${r.revertedBackfillRows} 行回填；停用 ${r.deactivatedLocalItems} 个本地商品。可重新导入。</div>`;
+    $('#stocky-report').innerHTML = `<div class="notice">✅ 已撤销：删除 ${r.deletedAdjustments} 张 STK 单、${r.deletedEvents} 个历史事件、${r.deletedLedgerRows} 行明细；回退 ${r.revertedBackfillRows} 行回填；删除 ${r.deletedLocalItems} 个本地商品。可重新导入。</div>`;
     e.target.disabled = false;
   });
 }
@@ -1142,8 +1142,23 @@ const ADJUSTMENT_STATUS = {
 };
 const adjustmentStatus = (status) =>
   `<span class="status-pill adjustment-${esc(status)}">${ADJUSTMENT_STATUS[status] || esc(status)}</span>`;
-const adjustmentNumber = (number, displayNumber = null) =>
-  displayNumber || `ADJ-${String(number || 0).padStart(5, '0')}`;
+// Imported Stocky records keep their original number (STK-3267 → shown as
+// #3267). App-created ones use ADJ-…. isStocky lets callers add a source tag.
+const stockyOriginalNo = (displayNumber) => {
+  const m = String(displayNumber || '').match(/^STK-(.+)$/);
+  return m ? m[1] : null;
+};
+const adjustmentNumber = (number, displayNumber = null) => {
+  const stk = stockyOriginalNo(displayNumber);
+  if (stk) return `#${esc(stk)}`;
+  return esc(displayNumber || `ADJ-${String(number || 0).padStart(5, '0')}`);
+};
+const stockyTag = (displayNumber) =>
+  stockyOriginalNo(displayNumber) ? '<span class="badge import">Stocky 导入</span>' : '';
+// Variant label, empty when it's the meaningless "Default Title".
+const variantLabel = (row) =>
+  row.variant_title && row.variant_title !== 'Default Title' ? esc(row.variant_title) : '';
+const numOrDash = (v) => (v === null || v === undefined ? '—' : v);
 
 async function viewAdjustments() {
   const options = await api('/adjustment-options');
@@ -1217,14 +1232,15 @@ async function viewAdjustments() {
     params.set('limit', '25');
     const result = await api(`/adjustments?${params}`);
     $('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
-      <thead><tr><th>Adjustment</th><th>Status</th><th>Reason</th><th>Created by</th><th>Location</th><th class="num">Items</th><th class="num">Total change</th><th>Created</th><th></th></tr></thead>
+      <thead><tr><th>调整单</th><th>原因 / 备注</th><th>操作人</th><th>仓位</th><th class="num">商品数</th><th class="num">合计</th><th>日期</th><th>状态</th><th></th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
-        <td><a class="item-link" href="#/adjustments/${row.id}"><strong>${adjustmentNumber(row.number, row.display_number)}</strong></a>${row.notes ? `<div class="muted small">${esc(row.notes)}</div>` : ''}</td>
-        <td>${adjustmentStatus(row.status)}${row.apply_error ? `<div class="error small">${esc(row.apply_error)}</div>` : ''}</td>
-        <td>${esc(row.reason || '—')}</td><td>${esc(row.recorded_by_name || '—')}
-          <div class="muted small">Created via: ${esc(row.created_by_account_name || row.login_account_name || '—')}${row.applied_by_account_name ? ` · Applied via: ${esc(row.applied_by_account_name)}` : ''}${row.handled_by_names ? ` · Handled: ${esc(row.handled_by_names)}` : ''}</div></td><td>${esc(row.locations || '—')}</td>
+        <td><a class="item-link" href="#/adjustments/${row.id}">${adjustmentNumber(row.number, row.display_number)}</a> ${stockyTag(row.display_number)}</td>
+        <td><strong>${esc(row.reason || '—')}</strong>${row.notes ? `<div class="muted small notes-preview">${esc(row.notes)}</div>` : ''}${row.apply_error ? `<div class="error small">${esc(row.apply_error)}</div>` : ''}</td>
+        <td>${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted small">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
+        <td>${esc(row.locations || '—')}</td>
         <td class="num">${row.line_count}</td><td class="num"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
-        <td>${fmtDate(row.created_at)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看 ${adjustmentNumber(row.number, row.display_number)}">→</a></td>
+        <td>${fmtDate(row.applied_at || row.created_at)}</td>
+        <td>${adjustmentStatus(row.status)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看">→</a></td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
     $('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
@@ -1585,35 +1601,36 @@ async function viewAdjustment(id) {
   const total = adjustment.lines.reduce((sum, line) => sum + Number(line.delta), 0);
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
-    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)}</h1><p class="muted">库存调整详情与 Shopify 写入状态。</p></div>
+    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${stockyTag(adjustment.display_number)}</h1><p class="muted">${esc(adjustment.reason || '未填写原因')} · ${esc(adjustment.recorded_by?.name || '未知操作人')} · ${fmtDate(adjustment.applied_at || adjustment.created_at)}</p></div>
       <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
         ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
         ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
       </div></div>
     ${adjustment.apply_error ? `<div class="notice adjustment-error"><strong>上次提交信息：</strong>${esc(adjustment.apply_error)}</div>` : ''}
+    ${adjustment.notes ? `<div class="card adjustment-notes-card"><span class="field-label">调整备注 Notes</span><p class="notes-body">${esc(adjustment.notes)}</p></div>` : ''}
     <div class="card event-overview adjustment-overview">
-      <div><span>Status</span><strong>${adjustmentStatus(adjustment.status)}</strong></div>
-      <div><span>Adjustment reason</span><strong>${esc(adjustment.reason || '—')}</strong></div>
-      <div><span>Created via Shopify account</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
-      <div><span>Applied via Shopify account</span><strong>${esc(adjustment.applied_by_account_name || '—')}</strong></div>
-      <div><span>Recorded by</span><strong>${esc(adjustment.recorded_by?.name || '—')}</strong></div>
-      <div><span>Handled by</span><strong>${esc(adjustment.handled_by?.map((person) => person.name).join(', ') || '—')}</strong></div>
-      <div><span>Location</span><strong>${esc(adjustment.lines[0]?.location || '—')}</strong></div>
-      <div><span>Total change</span><strong class="${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}">${signed(total)}</strong></div>
-      <div><span>${adjustment.applied_at ? 'Applied' : 'Created'}</span><strong>${fmtDate(adjustment.applied_at || adjustment.created_at)}</strong></div>
+      <div><span>调整原因 Reason</span><strong>${esc(adjustment.reason || '—')}</strong></div>
+      <div><span>记录员工 Recorded by</span><strong>${esc(adjustment.recorded_by?.name || '—')}</strong></div>
+      <div><span>经手员工 Handled by</span><strong>${esc(adjustment.handled_by?.map((person) => person.name).join(', ') || '—')}</strong></div>
+      <div><span>仓位 Location</span><strong>${esc([...new Set(adjustment.lines.map((l) => l.location))].join(', ') || '—')}</strong></div>
+      <div><span>合计变化 Total change</span><strong class="${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}">${signed(total)}</strong></div>
+      <div><span>状态 Status ${infoTip('Draft=草稿未提交；Submitting=提交中；Applied=已写入 Shopify（导入的历史单默认此状态）；Archived=已归档')}</span><strong>${adjustmentStatus(adjustment.status)}</strong></div>
+      <div><span>Shopify 登录账号</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
+      <div><span>${adjustment.applied_at ? '完成时间 Applied' : '创建时间 Created'}</span><strong>${fmtDate(adjustment.applied_at || adjustment.created_at)}</strong></div>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>调整明细</h2><p class="muted compact">Barcode 为主要识别编号；数量均为 Available。</p></div></div>
+      <div class="card-heading"><div><h2>调整明细</h2><p class="muted compact">共 ${adjustment.lines.length} 个商品/仓位；数量均为 Available。${stockyOriginalNo(adjustment.display_number) ? 'Stocky 导出不含调整前/后数量，故 Before/After 显示为 —。' : ''}</p></div></div>
       <div class="table-scroll"><table class="adjustment-lines">
-        <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th></tr></thead>
-        <tbody>${adjustment.lines.map((line) => `<tr>
-          <td><a class="item-link" href="#/items/${line.item_id}">${productName(line)}</a>${codeMeta(line)}</td>
-          <td class="num">${line.qty_before}</td><td class="num"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
-          <td class="num"><strong>${line.qty_after}</strong>${adjustment.status === 'draft' && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">当前 ${line.current_available}，提交时会重新校验</div>` : ''}</td>
-        </tr>`).join('')}</tbody>
+        <thead><tr><th>商品</th><th>规格</th><th>Barcode / SKU</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th></tr></thead>
+        <tbody>${adjustment.lines.length ? adjustment.lines.map((line) => `<tr>
+          <td><a class="item-link" href="#/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">本地</span>' : ''}</td>
+          <td>${variantLabel(line) || '<span class="muted">—</span>'}</td>
+          <td><strong>${esc(line.barcode || '—')}</strong>${line.sku ? `<div class="muted small">${esc(line.sku)}</div>` : ''}</td>
+          <td class="num">${numOrDash(line.qty_before)}</td><td class="num"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
+          <td class="num"><strong>${numOrDash(line.qty_after)}</strong>${adjustment.status === 'draft' && line.qty_before !== null && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">当前 ${line.current_available}，提交时会重新校验</div>` : ''}</td>
+        </tr>`).join('') : '<tr><td colspan="6" class="muted">此调整单没有商品明细（导入时商品无法识别）</td></tr>'}</tbody>
       </table></div>
-      ${adjustment.notes ? `<div class="adjustment-notes"><strong>Notes</strong><p>${esc(adjustment.notes)}</p></div>` : ''}
       <div class="adjustment-evidence">
         <strong>Evidence attachments</strong>
         ${attachmentListHtml(adjustment.attachments)}
