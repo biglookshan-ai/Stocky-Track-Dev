@@ -508,7 +508,7 @@ async function viewLocalItems() {
             <td>${variantLabel(r) || '<span class="muted">—</span>'}</td>
             <td><strong>${esc(r.barcode || '—')}</strong></td><td>${esc(r.sku || '—')}</td>
             <td class="num">${r.adjustment_count}</td>
-            <td class="small">${(r.adjustments || []).slice(0, 6).map((a) => `<a href="#/adjustments/${a.id}">${esc(String(a.no || '').replace(/^STK-/, '#'))}</a>`).join('、')}${r.adjustment_count > 6 ? ' …' : ''}</td>
+            <td class="small">${(r.adjustments || []).map((a) => `<a href="#/adjustments/${a.id}">${esc(String(a.no || '').replace(/^STK-/, '#'))}</a>`).join('、')}</td>
           </tr>`).join('') || '<tr><td colspan="6" class="muted">没有已删除产品</td></tr>'}</tbody>
         </table></div>
         ${total > rows.length ? `<p class="muted small">显示前 ${rows.length} 个（共 ${total}），用搜索缩小范围。</p>` : ''}

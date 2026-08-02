@@ -1111,7 +1111,9 @@ api.get('/items/:id/history', async (req, res) => {
       FROM selected s
       JOIN inventory_events e ON e.id=s.event_id
       JOIN locations loc ON loc.id=s.location_id
-      JOIN current_levels cl ON cl.item_id=$1 AND cl.location_id=s.location_id
+      -- LEFT JOIN: deleted/local products have no current_levels row, but their
+      -- historical adjustments must still be listed (qty_after just stays null).
+      LEFT JOIN current_levels cl ON cl.item_id=$1 AND cl.location_id=s.location_id
       CROSS JOIN states
       LEFT JOIN event_changes c ON c.event_id=s.event_id
         AND c.location_id=s.location_id AND c.state=states.state
@@ -1488,7 +1490,7 @@ initDb().then(() => {
   // clean undo of the previous run and a fresh re-import, so bug fixes to the
   // mapping self-heal on deploy. Precise undo never touches Shopify data.
   (async () => {
-    const STOCKY_IMPORT_VERSION = 3; // v3: SKU-fallback matching (query all barcodes+SKUs)
+    const STOCKY_IMPORT_VERSION = 4; // v4: better local-item names (variant/sku fallback)
     const csvPath = path.join(ROOT, 'data', 'stocky-adjustments.csv');
     if (!fs.existsSync(csvPath)) return;
     const done = await getState('stocky_import');

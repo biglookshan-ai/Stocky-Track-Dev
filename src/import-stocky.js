@@ -341,13 +341,17 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   // with no lines (the product would silently vanish from the record).
   const allEvents = [...plan.events, ...plan.coveredEvents];
   // A line is a true orphan only when neither its barcode NOR its SKU resolves
-  // to an existing catalog item. Those become local items.
-  const unmatchedBarcodes = new Map(); // barcode → sample line info (→ local item)
+  // to an existing catalog item. Those become local items. Across the file the
+  // same deleted barcode may appear both with and without a product name (Stocky
+  // blanks the title once a product is deleted) — keep the richest sample so the
+  // local item gets a real name, not "(Stocky) <barcode>".
+  const sampleRank = (l) => (l.product ? 3 : 0) + (l.variant ? 1 : 0);
+  const unmatchedBarcodes = new Map(); // barcode → best sample line info (→ local item)
   for (const e of allEvents) {
     for (const l of e.lines) {
-      if (!resolveItemId(lookups, l) && l.barcode && !unmatchedBarcodes.has(l.barcode)) {
-        unmatchedBarcodes.set(l.barcode, l);
-      }
+      if (resolveItemId(lookups, l) || !l.barcode) continue;
+      const cur = unmatchedBarcodes.get(l.barcode);
+      if (!cur || sampleRank(l) > sampleRank(cur)) unmatchedBarcodes.set(l.barcode, l);
     }
   }
   const newLocations = [...new Set(allEvents.flatMap((e) => e.lines.map((l) => l.location)))]
@@ -431,10 +435,15 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
       lookups.staffByName.set(name.toLowerCase(), r.rows[0].id);
     }
     for (const [barcode, sample] of unmatchedBarcodes) {
+      // Best available name: product title → variant → SKU → "(Stocky) barcode".
+      // When falling back to variant/SKU as the title, don't repeat it as variant.
+      const hasProduct = Boolean(sample.product);
+      const title = sample.product || sample.variant || sample.sku || `(Stocky) ${barcode}`;
+      const variant = hasProduct ? (sample.variant || '') : '';
       const r = await client.query(
         `INSERT INTO items (source, product_title, variant_title, sku, barcode, tracked, status)
          VALUES ('local', $1, $2, $3, $4, true, 'active') RETURNING id`,
-        [sample.product || `(Stocky) ${barcode}`, sample.variant || '', sample.sku || '', barcode]);
+        [title, variant, sample.sku || '', barcode]);
       lookups.itemByBarcode.set(barcode, r.rows[0].id);
       itemsCreated++;
     }
