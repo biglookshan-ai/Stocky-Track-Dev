@@ -672,7 +672,8 @@ api.get('/local-items', async (req, res) => {
     const rows = await q(`
       SELECT i.id, i.product_title, i.variant_title, i.barcode, i.sku,
              count(DISTINCT al.adjustment_id)::int AS adjustment_count,
-             (array_agg(DISTINCT a.display_number) FILTER (WHERE a.display_number IS NOT NULL))[1:6] AS adjustments
+             (json_agg(DISTINCT jsonb_build_object('id', a.id, 'no', a.display_number))
+                FILTER (WHERE a.id IS NOT NULL)) AS adjustments
       FROM items i
       LEFT JOIN adjustment_lines al ON al.item_id=i.id
       LEFT JOIN adjustments a ON a.id=al.adjustment_id
@@ -1104,7 +1105,9 @@ api.get('/items/:id/history', async (req, res) => {
              e.reference_document_uri AS event_reference_uri,
              e.reference_document_type AS event_reference_type,
              e.reference_document_id AS event_reference_id,
-             e.source_type AS event_source_type
+             e.source_type AS event_source_type,
+             (SELECT a.id FROM adjustments a
+              WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_id
       FROM selected s
       JOIN inventory_events e ON e.id=s.event_id
       JOIN locations loc ON loc.id=s.location_id
@@ -1225,6 +1228,8 @@ async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
               min(i.sku) AS sku,
               min(i.barcode) AS barcode,
               min(i.vendor) AS vendor,
+              (SELECT a.id FROM adjustments a
+               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_id,
               string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
        FROM inventory_events e
        JOIN inventory_ledger lg ON lg.event_id=e.id

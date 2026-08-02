@@ -183,6 +183,11 @@ const gidParts = (uri) => {
   return match ? { type: match[1], id: match[2] } : null;
 };
 const referenceCell = (row, shopHandle) => {
+  // A manual adjustment (imported or app-created) links to its detail page here.
+  if (row.adjustment_id) {
+    const no = row.reference_document_id ? `#${esc(row.reference_document_id)}` : '调整单';
+    return `<a href="#/adjustments/${row.adjustment_id}">调整单 ${no}</a>`;
+  }
   const ref = gidParts(row.reference_document_uri);
   const type = row.reference_document_type || ref?.type;
   const id = row.reference_document_id || ref?.id;
@@ -493,18 +498,18 @@ async function viewLocalItems() {
   const render = async (term = '') => {
     const { rows, total } = await api(`/local-items?q=${encodeURIComponent(term)}`);
     app.innerHTML = `
-      <div class="page-heading"><div><h1>本地商品（${total}）</h1><p class="muted">导入时按 Barcode 和 SKU 都在 Shopify 目录里找不到的产品，多为已停产/下架的旧品或 Stocky 内部 # 组件。若发现在售产品被列在此，多半是 SKU 两边不一致。</p></div><a class="back-link" href="#/items">← 返回商品</a></div>
+      <div class="page-heading"><div><h1>Shopify 已删除产品（${total}）</h1><p class="muted">这些产品在导入时按 Barcode 和 SKU 都在当前 Shopify 目录里找不到——基本是这几年停产/下架、已从 Shopify 删除的旧品，以及 Stocky 内部 # 组件。系统保留它们，只为不丢失其历史调整记录。</p></div><a class="back-link" href="#/items">← 返回商品</a></div>
       <div class="card">
         <div class="row"><input type="search" id="local-q" value="${esc(term)}" placeholder="搜索标题 / Barcode / SKU…"><button id="local-search" class="secondary">搜索</button></div>
         <div class="table-scroll"><table>
-          <thead><tr><th>商品</th><th>规格</th><th>Barcode</th><th>SKU</th><th class="num">调整单数</th><th>出现在</th></tr></thead>
+          <thead><tr><th>商品</th><th>规格</th><th>Barcode</th><th>SKU</th><th class="num">调整单数</th><th>出现在（点击跳转）</th></tr></thead>
           <tbody>${rows.map((r) => `<tr>
             <td><a class="item-link" href="#/items/${r.id}">${esc(r.product_title || '(无标题)')}</a></td>
             <td>${variantLabel(r) || '<span class="muted">—</span>'}</td>
             <td><strong>${esc(r.barcode || '—')}</strong></td><td>${esc(r.sku || '—')}</td>
             <td class="num">${r.adjustment_count}</td>
-            <td class="muted small">${(r.adjustments || []).map((n) => esc(String(n).replace(/^STK-/, '#'))).join('、')}${r.adjustment_count > 6 ? ' …' : ''}</td>
-          </tr>`).join('') || '<tr><td colspan="6" class="muted">没有本地商品</td></tr>'}</tbody>
+            <td class="small">${(r.adjustments || []).slice(0, 6).map((a) => `<a href="#/adjustments/${a.id}">${esc(String(a.no || '').replace(/^STK-/, '#'))}</a>`).join('、')}${r.adjustment_count > 6 ? ' …' : ''}</td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">没有已删除产品</td></tr>'}</tbody>
         </table></div>
         ${total > rows.length ? `<p class="muted small">显示前 ${rows.length} 个（共 ${total}），用搜索缩小范围。</p>` : ''}
       </div>`;
@@ -518,7 +523,7 @@ async function viewItems() {
   const options = await api('/item-options');
   let page = 1;
   app.innerHTML = `
-    <div class="page-heading"><div><h1>商品</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。<a href="#/local-items">查看本地商品 →</a></p></div></div>
+    <div class="page-heading"><div><h1>商品</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。<a href="#/local-items">查看 Shopify 已删除产品 →</a></p></div></div>
     <div class="card">
       <div class="filter-grid">
         <input type="search" id="q" placeholder="搜索 Barcode / 标题 / SKU / 品牌…">
@@ -558,7 +563,7 @@ async function viewItems() {
       $('#items-out').innerHTML = rows.length ? `
         <div class="table-scroll"><table class="items-table"><thead><tr><th>商品</th><th class="num">Unavailable</th><th class="num">Committed</th><th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th><th>最近库存修改</th><th>最近修改时间</th></tr></thead>
         <tbody>${rows.map((r) => `<tr>
-          <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">本地</span>' : ''}${codeMeta(r)}</td>
+          <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">已删除</span>' : ''}${codeMeta(r)}</td>
           <td class="num">${stockValue(r.total_unavailable)}</td>
           <td class="num">${stockValue(r.total_committed)}</td>
           <td class="num">${stockValue(r.total_available)}</td>
@@ -1650,7 +1655,7 @@ async function viewAdjustment(id) {
       <div class="table-scroll"><table class="adjustment-lines">
         <thead><tr><th>商品</th><th>规格</th><th>Barcode / SKU</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th></tr></thead>
         <tbody>${adjustment.lines.length ? adjustment.lines.map((line) => `<tr>
-          <td><a class="item-link" href="#/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">本地</span>' : ''}</td>
+          <td><a class="item-link" href="#/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">已删除</span>' : ''}</td>
           <td>${variantLabel(line) || '<span class="muted">—</span>'}</td>
           <td><strong>${esc(line.barcode || '—')}</strong>${line.sku ? `<div class="muted small">${esc(line.sku)}</div>` : ''}</td>
           <td class="num">${numOrDash(line.qty_before)}</td><td class="num"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>

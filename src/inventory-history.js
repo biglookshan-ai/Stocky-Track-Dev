@@ -84,6 +84,7 @@ export function groupAuditEvents(rows, levels = []) {
         reference_document_type: row.event_reference_type || null,
         reference_document_id: row.event_reference_id || null,
         source_type: row.event_source_type || row.source_type,
+        adjustment_id: row.adjustment_id || null,
         location: row.location,
         changes: {},
       });
