@@ -488,11 +488,37 @@ async function viewDashboard() {
   });
 }
 
+async function viewLocalItems() {
+  app.innerHTML = '<div class="card">加载中…</div>';
+  const render = async (term = '') => {
+    const { rows, total } = await api(`/local-items?q=${encodeURIComponent(term)}`);
+    app.innerHTML = `
+      <div class="page-heading"><div><h1>本地商品（${total}）</h1><p class="muted">导入时按 Barcode 和 SKU 都在 Shopify 目录里找不到的产品，多为已停产/下架的旧品或 Stocky 内部 # 组件。若发现在售产品被列在此，多半是 SKU 两边不一致。</p></div><a class="back-link" href="#/items">← 返回商品</a></div>
+      <div class="card">
+        <div class="row"><input type="search" id="local-q" value="${esc(term)}" placeholder="搜索标题 / Barcode / SKU…"><button id="local-search" class="secondary">搜索</button></div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>商品</th><th>规格</th><th>Barcode</th><th>SKU</th><th class="num">调整单数</th><th>出现在</th></tr></thead>
+          <tbody>${rows.map((r) => `<tr>
+            <td><a class="item-link" href="#/items/${r.id}">${esc(r.product_title || '(无标题)')}</a></td>
+            <td>${variantLabel(r) || '<span class="muted">—</span>'}</td>
+            <td><strong>${esc(r.barcode || '—')}</strong></td><td>${esc(r.sku || '—')}</td>
+            <td class="num">${r.adjustment_count}</td>
+            <td class="muted small">${(r.adjustments || []).map((n) => esc(String(n).replace(/^STK-/, '#'))).join('、')}${r.adjustment_count > 6 ? ' …' : ''}</td>
+          </tr>`).join('') || '<tr><td colspan="6" class="muted">没有本地商品</td></tr>'}</tbody>
+        </table></div>
+        ${total > rows.length ? `<p class="muted small">显示前 ${rows.length} 个（共 ${total}），用搜索缩小范围。</p>` : ''}
+      </div>`;
+    $('#local-search').onclick = () => render($('#local-q').value);
+    $('#local-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') render($('#local-q').value); });
+  };
+  await render();
+}
+
 async function viewItems() {
   const options = await api('/item-options');
   let page = 1;
   app.innerHTML = `
-    <div class="page-heading"><div><h1>商品</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。</p></div></div>
+    <div class="page-heading"><div><h1>商品</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。<a href="#/local-items">查看本地商品 →</a></p></div></div>
     <div class="card">
       <div class="filter-grid">
         <input type="search" id="q" placeholder="搜索 Barcode / 标题 / SKU / 品牌…">
@@ -1715,6 +1741,7 @@ async function route() {
       const query = new URLSearchParams(hash.split('?')[1] || '').get('q') || '';
       return await viewSearch(query);
     }
+    if (hash.startsWith('#/local-items')) return await viewLocalItems();
     if (hash.startsWith('#/items')) return await viewItems();
     if (hash.startsWith('#/history')) return await viewHistory();
     if (hash.startsWith('#/adjustments')) return await viewAdjustments();

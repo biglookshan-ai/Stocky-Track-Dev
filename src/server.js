@@ -660,6 +660,31 @@ api.post('/staff', async (req, res) => {
 });
 
 // Items list/search with business filters, inventory totals and last change.
+// Local items (created by the Stocky import because neither barcode nor SKU
+// matched the live catalog) with the adjustment records that reference each —
+// so the user can audit whether any is actually a live Shopify product.
+api.get('/local-items', async (req, res) => {
+  try {
+    const term = String(req.query.q || '').trim().slice(0, 80);
+    const args = [];
+    let cond = `i.source='local' AND i.status <> 'deleted'`;
+    if (term) { args.push(`%${term}%`); cond += ` AND (i.product_title ILIKE $1 OR i.barcode ILIKE $1 OR i.sku ILIKE $1)`; }
+    const rows = await q(`
+      SELECT i.id, i.product_title, i.variant_title, i.barcode, i.sku,
+             count(DISTINCT al.adjustment_id)::int AS adjustment_count,
+             (array_agg(DISTINCT a.display_number) FILTER (WHERE a.display_number IS NOT NULL))[1:6] AS adjustments
+      FROM items i
+      LEFT JOIN adjustment_lines al ON al.item_id=i.id
+      LEFT JOIN adjustments a ON a.id=al.adjustment_id
+      WHERE ${cond}
+      GROUP BY i.id
+      ORDER BY count(DISTINCT al.adjustment_id) DESC, i.product_title
+      LIMIT 500`, args);
+    const total = await q(`SELECT count(*)::int n FROM items i WHERE i.source='local' AND i.status <> 'deleted'`);
+    res.json({ rows: rows.rows, total: total.rows[0].n });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 api.get('/items', async (req, res) => {
   try {
     const term = String(req.query.q || '').trim().slice(0, 80);
