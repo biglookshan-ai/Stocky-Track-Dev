@@ -629,7 +629,7 @@ export async function adjustmentsCsv(filters = {}) {
   const params = [];
   const where = adjustmentFilters(filters, params);
   const result = await q(
-    `SELECT COALESCE(a.display_number, 'ADJ-' || lpad(a.number::text, 5, '0')) AS adjustment_number,
+    `SELECT COALESCE(a.display_number, 'A' || lpad(a.number::text, 4, '0') || '-' || to_char(a.created_at, 'YYMMDD')) AS adjustment_number,
             a.status, a.created_at, a.applied_at, r.name AS reason,
             login.display_name AS login_account,
             participants.recorded_by_name, participants.handled_by_names, a.notes,

@@ -1182,7 +1182,7 @@ const stockyOriginalNo = (displayNumber) => {
 const adjustmentNumber = (number, displayNumber = null) => {
   const stk = stockyOriginalNo(displayNumber);
   if (stk) return `#${esc(stk)}`;
-  return esc(displayNumber || `ADJ-${String(number || 0).padStart(5, '0')}`);
+  return esc(displayNumber || `A${String(number || 0).padStart(4, '0')}`);
 };
 const stockyTag = (displayNumber) =>
   stockyOriginalNo(displayNumber) ? '<span class="badge import">Stocky 导入</span>' : '';

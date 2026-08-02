@@ -46,10 +46,21 @@ test('normalizes recorded-by and multiple handled-by employees', () => {
   ]);
 });
 
-test('creates stable dated adjustment display numbers', () => {
+test('creates A<seq4>-YYMMDD display numbers (sequence first)', () => {
+  assert.equal(
+    newAdjustmentDisplayNumber(1, new Date('2026-08-01T10:00:00Z')),
+    'A0001-260801',
+  );
   assert.equal(
     newAdjustmentDisplayNumber(17, new Date('2026-07-28T10:00:00Z')),
-    'ADJ-202607-00017',
+    'A0017-260728',
+  );
+});
+
+test('sequence past 9999 keeps growing, date unaffected', () => {
+  assert.equal(
+    newAdjustmentDisplayNumber(12345, new Date('2027-12-31T00:00:00Z')),
+    'A12345-271231',
   );
 });
 

@@ -49,15 +49,19 @@ export function normalizeAdjustmentInput(input = {}) {
   return { locationId, reasonId, notes, lines, recordedBy, handledBy };
 }
 
+// Format: A<seq4>-<YYMMDD>, e.g. A0001-260801 (sequence first, then date).
+// Sequence is global and never resets; the date shows when the adjustment was
+// created. Seq grows past 4 digits naturally once it exceeds 9999.
 export function newAdjustmentDisplayNumber(number, createdAt = new Date()) {
   const value = Number(number);
   const date = new Date(createdAt);
   if (!Number.isInteger(value) || value <= 0 || !Number.isFinite(+date)) {
     throw new Error('调整编号无效');
   }
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
-  return `ADJ-${year}${month}-${String(value).padStart(5, '0')}`;
+  const yy = String(date.getUTCFullYear()).slice(-2);
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  return `A${String(value).padStart(4, '0')}-${yy}${mm}${dd}`;
 }
 
 export function shopifyAdjustmentReason(name = '') {
