@@ -202,24 +202,55 @@ export async function formalCoverageStart() {
   return r.rows[0]?.at || null;
 }
 
+// Resolve a CSV line to a catalog item id: barcode first (most specific), then
+// a UNIQUE non-empty SKU. Stocky's exported barcode often differs from
+// Shopify's, so SKU is the reliable fallback that prevents a real Shopify
+// product from being duplicated as a "local" item.
+export function resolveItemId(lookups, line) {
+  const byBarcode = line.barcode && lookups.itemByBarcode.get(line.barcode);
+  if (byBarcode) return byBarcode;
+  const sku = (line.sku || '').trim().toLowerCase();
+  if (sku && lookups.itemBySku.has(sku)) return lookups.itemBySku.get(sku); // unique only
+  return null;
+}
+
 async function loadLookups(plan) {
-  const barcodes = [...new Set(plan.events.flatMap((e) => e.lines.map((l) => l.barcode)))];
+  // Query the catalog for EVERY barcode and SKU that appears anywhere in the
+  // file (both eras), otherwise a recently-added product referenced only by a
+  // covered-era adjustment would never be checked and would become local.
+  const all = [...plan.events, ...plan.coveredEvents].flatMap((e) => e.lines);
+  const barcodes = [...new Set(all.map((l) => l.barcode).filter(Boolean))];
+  const skus = [...new Set(all.map((l) => (l.sku || '').trim()).filter(Boolean))];
   const items = await q(`
-    SELECT id, barcode, source, status FROM items WHERE barcode = ANY($1::text[])
-    ORDER BY (source='shopify') DESC, (status='active') DESC, id ASC`, [barcodes]);
+    SELECT id, barcode, sku, source, status FROM items
+    WHERE (barcode = ANY($1::text[]) OR lower(sku) = ANY($2::text[]))
+      AND status <> 'deleted'
+    ORDER BY (source='shopify') DESC, (status='active') DESC, id ASC`,
+  [barcodes, skus.map((s) => s.toLowerCase())]);
   const itemByBarcode = new Map();
   const dupBarcodes = new Set();
+  const skuCounts = new Map(); // lower sku → [ids]
   for (const row of items.rows) {
-    if (itemByBarcode.has(row.barcode)) dupBarcodes.add(row.barcode);
-    else itemByBarcode.set(row.barcode, row.id);
+    if (row.barcode) {
+      if (itemByBarcode.has(row.barcode)) dupBarcodes.add(row.barcode);
+      else itemByBarcode.set(row.barcode, row.id);
+    }
+    const sku = (row.sku || '').trim().toLowerCase();
+    if (sku) {
+      if (!skuCounts.has(sku)) skuCounts.set(sku, []);
+      skuCounts.get(sku).push(row.id);
+    }
   }
+  // Only unambiguous SKUs are usable as a fallback key.
+  const itemBySku = new Map();
+  for (const [sku, ids] of skuCounts) if (ids.length === 1) itemBySku.set(sku, ids[0]);
   const locations = await q('SELECT id, name FROM locations');
   const locByName = new Map(locations.rows.map((l) => [l.name.toLowerCase(), l.id]));
   const staff = await q('SELECT id, display_name FROM staff');
   const staffByName = new Map(staff.rows.map((s) => [s.display_name.toLowerCase(), s.id]));
   const reasons = await q('SELECT id, name FROM adjustment_reasons');
   const reasonByName = new Map(reasons.rows.map((r) => [r.name.trim().toLowerCase(), r.id]));
-  return { itemByBarcode, dupBarcodes: [...dupBarcodes], locByName, staffByName, reasonByName, barcodes };
+  return { itemByBarcode, itemBySku, dupBarcodes: [...dupBarcodes], locByName, staffByName, reasonByName, barcodes };
 }
 
 // Match a covered-era CSV group to the formal event that already records it,
@@ -229,7 +260,7 @@ async function loadLookups(plan) {
 async function mapCoveredEvent(e, lookups, exec, claimedGids, { commit }) {
   const resolved = [];
   for (const l of e.lines) {
-    const itemId = lookups.itemByBarcode.get(l.barcode);
+    const itemId = resolveItemId(lookups, l);
     const locationId = lookups.locByName.get(l.location.toLowerCase());
     if (!itemId || !locationId) return { status: 'unmatched' };
     resolved.push({ ...l, itemId, locationId });
@@ -309,10 +340,12 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   // covered-era adjustment referencing a since-deleted product would be created
   // with no lines (the product would silently vanish from the record).
   const allEvents = [...plan.events, ...plan.coveredEvents];
+  // A line is a true orphan only when neither its barcode NOR its SKU resolves
+  // to an existing catalog item. Those become local items.
   const unmatchedBarcodes = new Map(); // barcode → sample line info (→ local item)
   for (const e of allEvents) {
     for (const l of e.lines) {
-      if (!lookups.itemByBarcode.has(l.barcode) && !unmatchedBarcodes.has(l.barcode)) {
+      if (!resolveItemId(lookups, l) && l.barcode && !unmatchedBarcodes.has(l.barcode)) {
         unmatchedBarcodes.set(l.barcode, l);
       }
     }
@@ -425,7 +458,7 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
         eventId = existing.rows[0].id;
       }
       for (const l of e.lines) {
-        const itemId = lookups.itemByBarcode.get(l.barcode);
+        const itemId = resolveItemId(lookups, l);
         const locationId = lookups.locByName.get(l.location.toLowerCase());
         if (!itemId || !locationId) continue;
         const r = await client.query(
@@ -480,7 +513,7 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
           [adjustmentId, lookups.staffByName.get(name.toLowerCase()) || null, name]);
       }
       for (const l of mergeAdjustmentLines(e.lines)) {
-        const itemId = lookups.itemByBarcode.get(l.barcode);
+        const itemId = resolveItemId(lookups, l);
         const locationId = lookups.locByName.get(l.location.toLowerCase());
         if (!itemId || !locationId) continue;
         await client.query(

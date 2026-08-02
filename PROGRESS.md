@@ -20,6 +20,7 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- **导入匹配加 SKU 兜底（2026-08-02 v3）**：修复真实 Shopify 产品被误判"本地"的 bug——①loadLookups 只查 plan.events 的条码(漏近期产品)且只按 barcode，现查 events+coveredEvents 全部 barcode+SKU；②新增 resolveItemId：barcode 匹配不上时用唯一非空 SKU 兜底(Stocky 导出条码常与 Shopify 不一致)；③所有解析点统一走 resolveItemId。导入版本 bump 到 3 自动重导。真实产品重新关联→其历史回到产品页、不再是本地副本
 - **修复导入严重 bug + 布局重做（2026-08-02）**：①覆盖期(2026-01-29后)孤儿条码的本地商品此前被漏建(unmatchedBarcodes 只扫 plan.events 漏了 coveredEvents)，导致~150张单无明细行——改为扫 allEvents，192个条码补建；②导入用版本号(STOCKY_IMPORT_VERSION=2)驱动，部署自动 undo+重导自愈；③详情页重做：Notes 提到最前+醒目、原因/操作人上移、编号改显原 Stocky 号(#3267+Stocky导入标签)、加独立规格(Variant)列、null→—、Status 加说明tip；④撤销改真删无引用本地商品
 - **导入可完全撤销/重做**：/import/stocky/undo（界面「撤销导入」按钮）——删除 STK 单+导入事件+明细，按 stocky_import_backfill 追踪表逐字段清回回填内容（只清导入填的空字段，绝不动 Shopify 原有数据/手动编辑），停用无引用的本地商品，清 one-shot 标记以便重导。幂等
 - **旧员工/原因作为活数据源**：导入的 8 名员工 + 11 原因全部建为 active，成为新建调整的员工下拉+原因字典基础；原因方向按 -/+ 前缀自动判定；用户可在设置面板改名/改方向/停用

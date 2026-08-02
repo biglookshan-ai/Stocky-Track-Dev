@@ -1458,7 +1458,7 @@ initDb().then(() => {
   // clean undo of the previous run and a fresh re-import, so bug fixes to the
   // mapping self-heal on deploy. Precise undo never touches Shopify data.
   (async () => {
-    const STOCKY_IMPORT_VERSION = 2; // v2: local items for covered-era orphan barcodes
+    const STOCKY_IMPORT_VERSION = 3; // v3: SKU-fallback matching (query all barcodes+SKUs)
     const csvPath = path.join(ROOT, 'data', 'stocky-adjustments.csv');
     if (!fs.existsSync(csvPath)) return;
     const done = await getState('stocky_import');

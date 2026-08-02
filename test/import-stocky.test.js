@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee, mergeAdjustmentLines, pickCoveringEvent } from '../src/import-stocky.js';
+import { parseCsv, csvObjects, parseStockyDate, planImport, canonicalEmployee, mergeAdjustmentLines, pickCoveringEvent, resolveItemId } from '../src/import-stocky.js';
 
 test('parseCsv: quotes, embedded commas, newlines and CRLF', () => {
   const rows = parseCsv('a,b,c\r\n1,"x, y","line1\nline2"\r\n2,"he said ""hi""",z\n');
@@ -135,4 +135,24 @@ test('planImport: covered groups routed to coveredEvents, not dropped', () => {
   assert.equal(plan.events.length, 1);
   assert.equal(plan.coveredEvents.length, 1);
   assert.equal(plan.coveredEvents[0].number, '3000');
+});
+
+test('resolveItemId: barcode wins when present', () => {
+  const lk = { itemByBarcode: new Map([['540385', 11]]), itemBySku: new Map([['s5-flt-41', 22]]) };
+  assert.equal(resolveItemId(lk, { barcode: '540385', sku: 'S5-FLT-41' }), 11);
+});
+
+test('resolveItemId: falls back to unique SKU when barcode misses', () => {
+  const lk = { itemByBarcode: new Map(), itemBySku: new Map([['s5-flt-41', 22]]) };
+  assert.equal(resolveItemId(lk, { barcode: '999', sku: 'S5-FLT-41' }), 22);
+});
+
+test('resolveItemId: null when neither resolves (true orphan → local)', () => {
+  const lk = { itemByBarcode: new Map(), itemBySku: new Map() };
+  assert.equal(resolveItemId(lk, { barcode: '999', sku: 'X' }), null);
+});
+
+test('resolveItemId: blank sku never matches', () => {
+  const lk = { itemByBarcode: new Map(), itemBySku: new Map([['', 5]]) };
+  assert.equal(resolveItemId(lk, { barcode: '', sku: '' }), null);
 });
