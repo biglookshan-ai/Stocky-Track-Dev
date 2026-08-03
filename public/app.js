@@ -215,20 +215,26 @@ const referenceCell = (row, shopHandle) => {
   const labels = {
     Order: 'Order', PurchaseOrder: 'Purchase order',
     Transfer: 'Transfer', InventoryTransfer: 'Transfer', Adjustment: 'Adjustment',
+    // Shopify's wording for a manual stock edit; spelling it out as
+    // "Transfer Adjustment" reads like a transfer, which it is not.
+    TransferAdjustment: 'Shopify 库存调整',
   };
   const label = labels[type] || String(type || 'Reference').replace(/([a-z])([A-Z])/g, '$1 $2');
   const fallbackUrl = type === 'Order' && id && shopHandle
     ? `https://admin.shopify.com/store/${encodeURIComponent(shopHandle)}/orders/${encodeURIComponent(id)}`
     : null;
   const url = row.reference_admin_url || fallbackUrl;
-  const title = row.reference_name || `${label}${id ? ` #${id}` : ''}`;
+  // A raw uuid adds no meaning in the table — show a short form, keep the full
+  // value in the tooltip.
+  const shortId = id && String(id).length > 12 ? `${String(id).slice(0, 8)}…` : id;
+  const title = row.reference_name || `${label}${shortId ? ` #${shortId}` : ''}`;
   const details = [
     row.reference_customer_name,
     row.reference_status,
   ].filter(Boolean).map((value) => esc(value)).join(' · ');
   return `${url
     ? `<a class="reference-link" href="${esc(url)}" target="_blank" rel="noopener">${esc(title)} ↗</a>`
-    : esc(title)}${details ? `<div class="muted small">${details}</div>` : ''}`;
+    : `<span title="${esc(id ? `${label} ${id}` : label)}">${esc(title)}</span>`}${details ? `<div class="muted small">${details}</div>` : ''}`;
 };
 const eventRows = (rows, shopHandle) => rows.map((event) => `<tr>
   <td>${fmtDate(event.occurred_at)}</td>
