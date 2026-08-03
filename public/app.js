@@ -135,6 +135,15 @@ async function wireAttachmentActions(adjustmentId, attachments = []) {
 
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtDate = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '—';
+// Compact list format: date on the first line, time small underneath, so the
+// column never wraps mid-number.
+const fmtDateCompact = (d) => {
+  if (!d) return '—';
+  const t = new Date(d);
+  const date = `${t.getFullYear()}/${t.getMonth() + 1}/${t.getDate()}`;
+  const time = t.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  return `${date}<div class="muted xsmall">${time}</div>`;
+};
 const STATUS_HELP = {
   completion: '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。',
   currentInventory: '库存数字是实时的（变动信号一到就更新）。这里显示的是每天凌晨把全店所有商品与 Shopify 逐一核对的完成时间，是二次保险，不代表数字停留在该时刻。',
@@ -1200,6 +1209,14 @@ const adjustmentNumber = (number, displayNumber = null) => {
   if (stk) return `#${esc(stk)}`;
   return esc(displayNumber || `A${String(number || 0).padStart(4, '0')}`);
 };
+// List view shows just the sequence part (A0002), the full A0002-260803 stays
+// on the detail page where the date is useful.
+const shortAdjustmentNumber = (number, displayNumber = null) => {
+  const stk = stockyOriginalNo(displayNumber);
+  if (stk) return `#${esc(stk)}`;
+  const short = String(displayNumber || '').split('-')[0];
+  return esc(short || `A${String(number || 0).padStart(4, '0')}`);
+};
 const stockyTag = (displayNumber) =>
   stockyOriginalNo(displayNumber) ? '<span class="badge import">Stocky 导入</span>' : '';
 // Variant label, empty when it's the meaningless "Default Title".
@@ -1286,15 +1303,15 @@ async function viewAdjustments() {
     params.set('limit', '25');
     const result = await api(`/adjustments?${params}`);
     $w('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
-      <thead><tr><th>调整单</th><th>原因 / 备注</th><th>操作人</th><th>仓位</th><th class="num">商品数</th><th class="num">合计</th><th>日期</th><th>状态</th><th></th></tr></thead>
+      <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th><th></th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
-        <td><a class="item-link" href="#/adjustments/${row.id}">${adjustmentNumber(row.number, row.display_number)}</a> ${stockyTag(row.display_number)}</td>
-        <td><strong>${esc(row.reason || '—')}</strong>${row.notes ? `<div class="muted small notes-preview">${esc(row.notes)}</div>` : ''}${row.apply_error ? `<div class="error small">${esc(row.apply_error)}</div>` : ''}</td>
-        <td>${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted small">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
-        <td>${esc(row.locations || '—')}</td>
-        <td class="num">${row.line_count}</td><td class="num"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
-        <td>${fmtDate(row.applied_at || row.created_at)}</td>
-        <td>${adjustmentStatus(row.status)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看">→</a></td>
+        <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a>${stockyTag(row.display_number)}</td>
+        <td class="col-note">${row.notes ? `<div class="note-main">${esc(row.notes)}</div>` : '<div class="note-main muted">（无备注）</div>'}<div class="muted xsmall">${esc(row.reason || '—')}</div>${row.apply_error ? `<div class="error xsmall">${esc(row.apply_error)}</div>` : ''}</td>
+        <td class="col-person">${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted xsmall">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
+        <td class="col-loc">${esc(row.locations || '—')}</td>
+        <td class="num col-qty">${row.line_count}</td><td class="num col-qty"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
+        <td class="col-date">${fmtDateCompact(row.applied_at || row.created_at)}</td>
+        <td class="col-status">${adjustmentStatus(row.status)}</td><td class="col-arrow"><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看">→</a></td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
     $w('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
