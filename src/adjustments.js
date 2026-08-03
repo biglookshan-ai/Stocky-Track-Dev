@@ -26,13 +26,19 @@ async function transaction(fn) {
 }
 
 async function participantSnapshot(client, person, fallbackStaffId = null) {
-  const staffId = person?.staffId || fallbackStaffId;
+  const typedName = String(person?.name || '').trim();
+  // An explicitly typed name always wins: it must never fall back to the login
+  // account's staff row (which may be inactive and would then reject the save).
+  const staffId = person?.staffId || (typedName ? null : fallbackStaffId);
   if (staffId) {
     const staff = await client.query(
-      `SELECT id, display_name FROM staff WHERE id=$1 AND active`,
+      `SELECT id, display_name FROM staff WHERE id=$1`,
       [staffId],
     );
-    if (!staff.rowCount) throw new Error('所选员工不存在或已停用');
+    if (!staff.rowCount) throw new Error('所选员工不存在');
+    // Re-activate rather than reject: a deactivated person can still be picked
+    // deliberately, and blocking the save here loses the user's whole draft.
+    await client.query('UPDATE staff SET active=true WHERE id=$1 AND NOT active', [staffId]);
     return {
       staffId: staff.rows[0].id,
       name: person?.name || staff.rows[0].display_name,
