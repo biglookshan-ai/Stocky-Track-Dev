@@ -51,9 +51,12 @@ const syncNavigationControls = () => {
   if (forward) forward.disabled = !navigationController?.canGoForward();
 };
 const navigateTo = (url, { replace = false, render = true } = {}) => {
-  navigationController.navigate(url, { replace });
+  const current = navigationController.routeFromLocation();
+  const target = navigationController.navigate(url, { replace });
   syncNavigationControls();
-  if (render) route();
+  // A new path uses window.open(path, '_self') so Shopify and the iframe move
+  // together. Only replacement updates stay inside the current document.
+  if (render && (replace || target === current)) route();
 };
 
 const sessionClient = window.InventorySessionClient.create({
@@ -2117,7 +2120,6 @@ document.addEventListener('click', (event) => {
   if (anchor.hasAttribute('data-app-back')) {
     navigationController.back(target);
     syncNavigationControls();
-    route();
     return;
   }
   navigateTo(target);
@@ -2126,12 +2128,10 @@ document.addEventListener('click', (event) => {
 $('#app-back').onclick = () => {
   navigationController.back(parentRoute() || '/dashboard');
   syncNavigationControls();
-  route();
 };
 $('#app-forward').onclick = () => {
   navigationController.forward();
   syncNavigationControls();
-  route();
 };
 $('#global-search').onsubmit = (event) => {
   event.preventDefault();
