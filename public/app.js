@@ -632,50 +632,49 @@ const inventoryNumber = (value, key = '') => {
   const className = key === 'available' && Number(value) < 0 ? 'negative' : Number(value) > 0 ? 'positive' : '';
   return `<span class="inventory-value ${className}">${esc(value)}</span>`;
 };
-const metricCard = (levels, key) => {
-  const metric = TREND_METRICS[key];
-  const value = levelTotal(levels, key);
-  return `<div class="inventory-metric ${key === 'available' && Number(value) < 0 ? 'attention' : ''}">
-    <div class="inventory-metric-label">${metric.label} ${infoTip(metric.help)}</div>
-    ${inventoryNumber(value, key)}
-    <div class="inventory-metric-note">${key === 'available' && Number(value) < 0
-      ? `库存不足 ${Math.abs(Number(value))}`
-      : key === 'incoming' && Number(value) > 0 ? `${value} 件正在入库` : '全部仓位合计'}</div>
-  </div>`;
+// One matrix instead of a metric grid plus one card per warehouse: rows are
+// 合计 + each location, columns are the inventory states. The state labels then
+// appear once rather than being repeated for every warehouse.
+const INVENTORY_STATE_COLUMNS = [
+  ['available', 'Available'],
+  ['on_hand', 'On hand'],
+  ['committed', 'Committed'],
+  ['incoming', 'Incoming'],
+  ['unavailable', 'Unavailable'],
+];
+const sumState = (levels, key) => {
+  const values = levels.map((l) => l[key]).filter((v) => v !== null && v !== undefined);
+  return values.length ? values.reduce((a, b) => a + Number(b), 0) : null;
 };
-const locationCard = (level) => {
-  const available = level.available === null ? null : Number(level.available);
-  const unavailable = level.unavailable === null ? null : Number(level.unavailable);
-  const detailStates = [
-    ['Committed', level.committed],
-    ['Reserved', level.reserved],
-    ['Damaged', level.damaged],
-    ['Safety stock', level.safety_stock],
+const stateCell = (value, key) => {
+  if (value === null || value === undefined) return '<td class="state-cell muted">未提供</td>';
+  const n = Number(value);
+  const cls = key === 'available' && n < 0 ? 'negative' : '';
+  return `<td class="state-cell ${cls}">${signedPlain(n)}</td>`;
+};
+const signedPlain = (n) => (Number(n) < 0 ? `−${Math.abs(Number(n))}` : String(Number(n)));
+const inventoryMatrix = (levels) => {
+  if (!levels.length) return '<div class="trend-empty">Shopify 尚未提供仓位库存。</div>';
+  const totals = Object.fromEntries(INVENTORY_STATE_COLUMNS.map(([key]) => [key, sumState(levels, key)]));
+  const breakdown = (level) => [
+    ['Committed', level.committed], ['Reserved', level.reserved],
+    ['Damaged', level.damaged], ['Safety stock', level.safety_stock],
     ['Quality control', level.quality_control],
-  ].filter(([, value]) => value !== null && value !== undefined);
-  const status = available < 0
-    ? `<span class="location-status danger">库存不足 ${Math.abs(available)}</span>`
-    : Number(level.incoming || 0) > 0
-      ? `<span class="location-status incoming">有 ${esc(level.incoming)} 件在途</span>`
-      : '<span class="location-status">库存已同步</span>';
-  return `<article class="location-inventory-card">
-    <header>
-      <div><h3>${esc(level.name)}</h3>${status}</div>
-      <span class="location-updated">更新于 ${fmtDate(level.updated_at)}</span>
-    </header>
-    <div class="location-metrics">
-      <div><span>Available</span>${inventoryNumber(level.available, 'available')}</div>
-      <div><span>On hand</span>${inventoryNumber(level.on_hand)}</div>
-      <div><span>Incoming</span>${inventoryNumber(level.incoming)}</div>
-      <div class="unavailable-total"><span>Unavailable ${infoTip('由 On hand − Available 计算，是不可售库存总量；Committed 等状态包含在其中，不应与其再次相加。')}</span>${inventoryNumber(unavailable)}</div>
-    </div>
-    <div class="location-breakdown">
-      <span>Unavailable 明细</span>
-      ${detailStates.length
-        ? detailStates.map(([name, value]) => `<span>${name} <strong>${esc(value)}</strong></span>`).join('')
-        : '<span class="muted">Shopify 未提供明细</span>'}
-    </div>
-  </article>`;
+  ].filter(([, v]) => v !== null && v !== undefined && Number(v) !== 0);
+  const rows = levels.map((level) => {
+    const extra = breakdown(level);
+    return `<tr>
+      <th scope="row">${esc(level.name)}${extra.length ? `<div class="muted xsmall">${extra.map(([n, v]) => `${n} ${esc(v)}`).join(' · ')}</div>` : ''}</th>
+      ${INVENTORY_STATE_COLUMNS.map(([key]) => stateCell(level[key], key)).join('')}
+    </tr>`;
+  }).join('');
+  return `<div class="table-scroll"><table class="inventory-matrix">
+    <thead><tr><th>仓位</th>${INVENTORY_STATE_COLUMNS.map(([key, label]) => `<th>${label}${key === 'unavailable' ? ` ${infoTip('由 On hand − Available 计算，是不可售库存总量；Committed 等状态包含在其中，不应与其再次相加。')}` : ''}</th>`).join('')}</tr></thead>
+    <tbody>
+      <tr class="total-row"><th scope="row">全部仓位合计</th>${INVENTORY_STATE_COLUMNS.map(([key]) => stateCell(totals[key], key)).join('')}</tr>
+      ${rows}
+    </tbody>
+  </table></div>`;
 };
 
 function inventoryTrendChart(data) {
@@ -919,12 +918,7 @@ async function viewItem(id) {
         ${links.admin ? `<a class="button" href="${esc(links.admin)}" target="_blank" rel="noopener">打开 Shopify 后台 ↗</a>` : ''}
       </div></div>
       <div class="product-detail-meta">${codeMeta(item)}<span>零售价 ${item.price ?? '—'} · 成本 ${item.unit_cost ?? '—'}</span></div>
-      <div class="inventory-overview-grid">
-        ${metricCard(levels, 'available')}
-        ${metricCard(levels, 'on_hand')}
-        ${metricCard(levels, 'committed')}
-        ${metricCard(levels, 'incoming')}
-      </div>
+      ${inventoryMatrix(levels)}
       <div class="inventory-last-change">
         <span>最近库存变动 <strong>${lastChange ? esc(lastInventoryChange(lastChange)) : '暂无记录'}</strong></span>
         <span>最近同步 <strong>${fmtDate(latestLevelUpdate)}</strong></span>
@@ -957,10 +951,6 @@ async function viewItem(id) {
       </div>
       <div id="sales-history"><div class="trend-loading">正在计算销售历史…</div></div>
       <div id="sales-pagination" class="pagination"></div>
-    </div>
-    <div class="card">
-      <div class="card-heading"><div><h2>各仓库存状态</h2><p class="muted compact">Unavailable 是不可售总量，Committed 等状态属于其明细，不重复相加。</p></div></div>
-      <div class="location-inventory-list">${levels.map(locationCard).join('') || '<div class="trend-empty">Shopify 尚未提供仓位库存。</div>'}</div>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>历史修改记录</h2><p id="history-range" class="muted compact">本地已保存的全部时间范围，可分页查看。</p></div>
