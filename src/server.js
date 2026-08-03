@@ -647,6 +647,39 @@ api.patch('/adjustment-reasons/:id', async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Delete a reason. Reasons referenced by existing adjustments cannot be removed
+// without breaking history, so those are deactivated instead — the caller is
+// told which happened.
+api.delete('/adjustment-reasons/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const used = await q('SELECT count(*)::int n FROM adjustments WHERE reason_id=$1', [id]);
+    if (used.rows[0].n > 0) {
+      await q('UPDATE adjustment_reasons SET active=false WHERE id=$1', [id]);
+      return res.json({ deleted: false, deactivated: true, usedBy: used.rows[0].n });
+    }
+    await q('DELETE FROM adjustment_reasons WHERE id=$1', [id]);
+    res.json({ deleted: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Same rule for staff: referenced people are deactivated, unused ones removed.
+api.delete('/staff/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const used = await q(`
+      SELECT (SELECT count(*) FROM adjustments WHERE staff_id=$1 OR created_by_staff_id=$1 OR applied_by_staff_id=$1)
+           + (SELECT count(*) FROM adjustment_participants WHERE staff_id=$1)
+           + (SELECT count(*) FROM inventory_ledger WHERE staff_id=$1) AS n`, [id]);
+    if (Number(used.rows[0].n) > 0) {
+      await q('UPDATE staff SET active=false WHERE id=$1', [id]);
+      return res.json({ deleted: false, deactivated: true, usedBy: Number(used.rows[0].n) });
+    }
+    await q('DELETE FROM staff WHERE id=$1', [id]);
+    res.json({ deleted: true });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
 api.patch('/staff/:id', async (req, res) => {
   try {
     res.json({ staff: await updateStaff(req.params.id, req.body) });
@@ -1238,6 +1271,16 @@ async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
                WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_number,
               (SELECT a.display_number FROM adjustments a
                WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_display_number,
+              -- Full product list so multi-variant events can be expanded inline
+              -- instead of forcing a click into the detail page.
+              (SELECT json_agg(p) FROM (
+                 SELECT DISTINCT pi.id, pi.product_title, pi.variant_title,
+                        pi.barcode, pi.sku
+                 FROM inventory_ledger plg JOIN items pi ON pi.id=plg.item_id
+                 WHERE plg.event_id=e.id
+                 ORDER BY pi.product_title, pi.variant_title
+                 LIMIT 50
+               ) p) AS products,
               string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
        FROM inventory_events e
        JOIN inventory_ledger lg ON lg.event_id=e.id

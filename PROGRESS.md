@@ -20,6 +20,7 @@
 - P4：Low stock / Lost revenue / Best sellers + 轻量盘点
 
 ## 🏁 最近完成
+- **UI/UX 大批改进（2026-08-03）**：①导航改为 首页/手动调整/库存历史/产品列表，去掉 CGP Inventory 品牌位；②首页顺序改为 最近3天库存变动→计数卡→数据同步；③产品列表「Shopify 已删除产品」改为右上按钮；④修改记录多变体事件可就地折叠展开(每商品一行+可点进商品)，不必再点进详情；⑤调整原因/员工新增删除功能(被历史引用的自动降级为停用并提示)，设置区排版溢出修复；⑥新建调整：搜索框移到调整明细下方、**搜索改 Shopify 式分词**(「dzofilm arles 100mm」不再搜不到)、结果支持勾选多选批量加入(变体级)、扫码精确命中仍即时加入
 - **导入三修 + 已删除产品可读性（2026-08-02）**：①已删除/本地产品的历史修改记录此前被 `JOIN current_levels`(内连接)全过滤(计数36却空表)→改 LEFT JOIN，历史正常显示且每条链接回调整单；②本地商品名 CSV 有766行Product空→回退成"(Stocky)编号"，改为 产品名→变体名→SKU→编号，且同条码取最富样本(1861有名/377用变体/0只剩编号)；③已删除产品清单"出现在"去掉6个上限显示全部调整单；导入版本 bump 4
 - **导入匹配加 SKU 兜底（2026-08-02 v3）**：修复真实 Shopify 产品被误判"本地"的 bug——①loadLookups 只查 plan.events 的条码(漏近期产品)且只按 barcode，现查 events+coveredEvents 全部 barcode+SKU；②新增 resolveItemId：barcode 匹配不上时用唯一非空 SKU 兜底(Stocky 导出条码常与 Shopify 不一致)；③所有解析点统一走 resolveItemId。导入版本 bump 到 3 自动重导。真实产品重新关联→其历史回到产品页、不再是本地副本
 - **修复导入严重 bug + 布局重做（2026-08-02）**：①覆盖期(2026-01-29后)孤儿条码的本地商品此前被漏建(unmatchedBarcodes 只扫 plan.events 漏了 coveredEvents)，导致~150张单无明细行——改为扫 allEvents，192个条码补建；②导入用版本号(STOCKY_IMPORT_VERSION=2)驱动，部署自动 undo+重导自愈；③详情页重做：Notes 提到最前+醒目、原因/操作人上移、编号改显原 Stocky 号(#3267+Stocky导入标签)、加独立规格(Variant)列、null→—、Status 加说明tip；④撤销改真删无引用本地商品

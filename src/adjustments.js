@@ -144,9 +144,19 @@ export async function listAdjustmentOptions() {
 export async function searchAdjustmentItems({ term, locationId }) {
   const location = Number(locationId);
   if (!Number.isInteger(location) || location <= 0) throw new Error('请选择仓位');
-  const search = String(term || '').trim().slice(0, 100);
+  const search = String(term || '').trim().slice(0, 120);
   if (!search) return [];
-  const like = `%${search}%`;
+  // Shopify-style tokenized search: split on whitespace and require EVERY word
+  // to appear somewhere in the combined searchable text (title + variant + sku +
+  // barcode + vendor), in any order. So "dzofilm arles 100mm" matches
+  // "DZOFILM ARLES 100mm T1.4 …" even though the words aren't a single run.
+  const tokens = search.split(/\s+/).filter(Boolean).slice(0, 10);
+  const params = [location, search];
+  const tokenClauses = tokens.map((tok) => {
+    params.push(`%${tok}%`);
+    return `(concat_ws(' ', i.product_title, i.variant_title, i.sku, i.barcode, i.vendor) ILIKE $${params.length})`;
+  });
+  const where = tokenClauses.length ? `AND ${tokenClauses.join(' AND ')}` : '';
   const result = await q(
     `SELECT i.id, i.product_title, i.variant_title, i.barcode, i.sku, i.vendor,
             i.shopify_inventory_item_gid, cl.available
@@ -154,13 +164,12 @@ export async function searchAdjustmentItems({ term, locationId }) {
      JOIN current_levels cl ON cl.item_id=i.id AND cl.location_id=$1
      WHERE i.status <> 'deleted' AND i.tracked AND i.shopify_inventory_item_gid IS NOT NULL
        AND cl.available IS NOT NULL
-       AND (i.barcode ILIKE $2 OR i.sku ILIKE $2 OR i.product_title ILIKE $2
-            OR i.variant_title ILIKE $2 OR i.vendor ILIKE $2)
+       ${where}
      ORDER BY
-       CASE WHEN i.barcode=$3 THEN 0 WHEN i.sku=$3 THEN 1 ELSE 2 END,
+       CASE WHEN i.barcode=$2 THEN 0 WHEN i.sku=$2 THEN 1 ELSE 2 END,
        i.product_title, i.variant_title
-     LIMIT 30`,
-    [location, like, search],
+     LIMIT 50`,
+    params,
   );
   return result.rows;
 }

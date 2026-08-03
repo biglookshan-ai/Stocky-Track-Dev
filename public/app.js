@@ -303,6 +303,18 @@ async function viewDashboard() {
     <div class="page-heading">
       <div><h1>库存概览</h1><p class="muted">查看商品、修改记录和数据同步状态。</p></div>
     </div>
+    <div class="card">
+      <div class="card-heading"><div><h2>最近 3 天库存变动</h2><p class="muted compact">每个商品显示最近一次库存修改。</p></div><a class="subtle-link" href="#/history">查看全部修改记录 →</a></div>
+      <div class="table-scroll"><table class="recent-products"><thead><tr><th>商品</th><th>Activity</th><th>Created by</th><th>Location</th><th class="num">Available</th><th>Last change</th></tr></thead>
+      <tbody id="recent-products-body">${initialRecent.rows.map((row) => `<tr>
+        <td><a class="item-link" href="#/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
+        <td>${esc(activityLabel(row.activity))}<div>${srcBadge(row.source_type)}</div></td>
+        <td>${actorCell(row)}</td><td>${esc(row.locations)}</td>
+        <td class="num">${row.total_available}</td>
+        <td>${esc(lastInventoryChange(row))}<div class="muted small">${fmtDate(row.occurred_at)}</div></td>
+      </tr>`).join('') || '<tr><td colspan="6" class="muted">最近 3 天没有库存修改</td></tr>'}</tbody></table></div>
+      <div id="recent-products-pagination" class="pagination"></div>
+    </div>
     <div class="grid overview-grid">
       <a class="stat stat-link" href="#/items"><div class="n">${s.items.n}</div><div class="l">商品 / Barcode</div><div class="hint">查看商品与各仓库存</div></a>
       <a class="stat stat-link" href="#/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
@@ -324,18 +336,6 @@ async function viewDashboard() {
           : backfill?.error ? `同步已暂停：${esc(backfill.error)}`
           : backfill?.finishedAt ? `最近 180 天已同步完成（${fmtDate(backfill.finishedAt)}）。` : '尚未同步 Shopify 最近 180 天。'}</div></div>
       </div>
-    </div>
-    <div class="card">
-      <div class="card-heading"><div><h2>最近 3 天修改的商品</h2><p class="muted compact">每个商品显示最近一次库存修改。</p></div><a class="subtle-link" href="#/history">查看全部修改记录 →</a></div>
-      <div class="table-scroll"><table class="recent-products"><thead><tr><th>商品</th><th>Activity</th><th>Created by</th><th>Location</th><th class="num">Available</th><th>Last change</th></tr></thead>
-      <tbody id="recent-products-body">${initialRecent.rows.map((row) => `<tr>
-        <td><a class="item-link" href="#/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
-        <td>${esc(activityLabel(row.activity))}<div>${srcBadge(row.source_type)}</div></td>
-        <td>${actorCell(row)}</td><td>${esc(row.locations)}</td>
-        <td class="num">${row.total_available}</td>
-        <td>${esc(lastInventoryChange(row))}<div class="muted small">${fmtDate(row.occurred_at)}</div></td>
-      </tr>`).join('') || '<tr><td colspan="6" class="muted">最近 3 天没有库存修改</td></tr>'}</tbody></table></div>
-      <div id="recent-products-pagination" class="pagination"></div>
     </div>
     <details class="card system-details">
       <summary>系统状态说明</summary>
@@ -523,7 +523,8 @@ async function viewItems() {
   const options = await api('/item-options');
   let page = 1;
   app.innerHTML = `
-    <div class="page-heading"><div><h1>商品</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。<a href="#/local-items">查看 Shopify 已删除产品 →</a></p></div></div>
+    <div class="page-heading"><div><h1>产品列表</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。</p></div>
+      <div class="button-group"><a class="button secondary" href="#/local-items">Shopify 已删除产品</a></div></div>
     <div class="card">
       <div class="filter-grid">
         <input type="search" id="q" placeholder="搜索 Barcode / 标题 / SKU / 品牌…">
@@ -1081,12 +1082,16 @@ async function viewHistory() {
         <div class="table-scroll"><table class="store-history">
           <thead><tr><th>Date</th><th>Activity</th><th>Created by</th><th>Product</th><th>Location</th><th>Reference</th></tr></thead>
           <tbody>${result.rows.map((row) => {
+            // Multi-variant events expand inline (one product per line) instead
+            // of only being visible after clicking into the detail page.
             const product = row.product_count === 1
-              ? `<span class="event-product-title">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</span>${codeMeta(row)}`
-              : `<strong>${row.product_count} 个商品变体</strong>`;
+              ? `<a class="history-event-link" href="#/history/${row.id}" title="查看本次修改详情"><span class="event-product-title">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</span>${codeMeta(row)}<span class="history-arrow" aria-hidden="true">→</span></a>`
+              : `<details class="product-expand"><summary><strong>${row.product_count} 个商品变体</strong></summary>
+                  <ul class="product-lines">${(row.products || []).map((p) => `<li><a class="item-link" href="#/items/${p.id}">${esc(p.product_title)}${p.variant_title && p.variant_title !== 'Default Title' ? ` / ${esc(p.variant_title)}` : ''}</a> <span class="muted">${esc(p.barcode || p.sku || '')}</span></li>`).join('')}</ul>
+                  <a class="subtle-link" href="#/history/${row.id}">查看本次修改详情 →</a></details>`;
             return `<tr><td>${fmtDate(row.occurred_at)}</td>
               <td><span class="activity">${esc(activityLabel(row.activity))}</span><div>${srcBadge(row.source_type)}</div></td>
-              <td>${actorCell(row)}</td><td><a class="history-event-link" href="#/history/${row.id}" title="查看本次修改详情">${product}<span class="history-arrow" aria-hidden="true">→</span></a></td><td>${esc(row.locations)}</td>
+              <td>${actorCell(row)}</td><td>${product}</td><td>${esc(row.locations)}</td>
               <td>${referenceCell(row, result.shopHandle)}</td></tr>`;
           }).join('') || '<tr><td colspan="6" class="muted">暂无修改记录</td></tr>'}</tbody>
         </table></div>
@@ -1227,6 +1232,7 @@ async function viewAdjustments() {
             </select>
             <label><input type="checkbox" data-reason-active="${reason.id}" ${reason.active ? 'checked' : ''}> Active</label>
             <button class="secondary small-button save-reason" data-id="${reason.id}">保存</button>
+            <button class="secondary small-button danger delete-reason" data-id="${reason.id}" data-name="${esc(reason.name)}" title="删除">删除</button>
           </div>`).join('')}</div>
           <div class="setting-row new-reason"><input id="new-reason-name" type="text" placeholder="New reason">
             <select id="new-reason-direction"><option value="any">Increase / decrease</option><option value="in">Increase only</option><option value="out">Decrease only</option></select>
@@ -1239,6 +1245,7 @@ async function viewAdjustments() {
             <input type="text" value="${esc(person.employee_code || '')}" placeholder="员工编号" data-staff-code="${person.id}">
             <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}">
             <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
+            <button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}" title="删除">删除</button>
           </div>`).join('') || '<p class="muted">尚无员工资料。</p>'}</div>
           <div class="setting-row new-staff">
             <span class="muted">本地员工</span>
@@ -1310,6 +1317,24 @@ async function viewAdjustments() {
       } catch (error) { alert(`保存失败：${error.message}`); button.disabled = false; }
     };
   });
+  // Delete reason / staff. The API deactivates instead of deleting when the
+  // record is referenced by history, and tells us which happened.
+  const wireDelete = (selector, path, label) => {
+    document.querySelectorAll(selector).forEach((button) => {
+      button.onclick = async () => {
+        if (!confirm(`删除${label}「${button.dataset.name}」？\n若历史记录已使用过它，会自动改为停用以保留历史。`)) return;
+        button.disabled = true;
+        try {
+          const r = await api(`${path}/${button.dataset.id}`, { method: 'DELETE' });
+          if (r.deactivated) alert(`「${button.dataset.name}」已被 ${r.usedBy} 条历史记录使用，无法删除，已改为停用（不再出现在新调整中）。`);
+          await viewAdjustments();
+          $('#adjustment-settings').open = true;
+        } catch (error) { alert(`删除失败：${error.message}`); button.disabled = false; }
+      };
+    });
+  };
+  wireDelete('.delete-reason', '/adjustment-reasons', '原因');
+  wireDelete('.delete-staff', '/staff', '员工');
   document.querySelectorAll('.save-staff').forEach((button) => {
     button.onclick = async () => {
       button.disabled = true;
@@ -1423,13 +1448,13 @@ async function viewAdjustmentForm(id = null) {
           ${id ? `<div id="existing-attachments">${attachmentListHtml(adjustment.attachments, true)}</div>` : ''}
         </div>
       </div>
+      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">选择 − 或 +，再输入变化数量；After 会根据当前 Available 自动计算。</p></div></div>
+      <div id="draft-lines"></div>
       <div class="item-picker">
-        <div><h2>添加商品</h2><p class="muted compact">以 Barcode 为主要识别编号，也可搜索 SKU、标题或 Brand。</p></div>
+        <div><h2>添加商品</h2><p class="muted compact">扫描条码，或输入 Barcode / SKU / 标题 / Brand（可用空格分词，如「dzofilm arles 100mm」）。勾选后可一次加入多个变体。</p></div>
         <div class="picker-search"><input id="draft-item-search" type="search" placeholder="扫描或输入 Barcode / SKU / 商品"><button id="draft-item-find" class="secondary">搜索</button></div>
       </div>
       <div id="draft-search-results"></div>
-      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">选择 − 或 +，再输入变化数量；After 会根据当前 Available 自动计算。</p></div></div>
-      <div id="draft-lines"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">取消</a><button id="save-draft">保存 Draft</button></div>
     </div>`;
 
@@ -1527,28 +1552,65 @@ async function viewAdjustmentForm(id = null) {
       button.onclick = () => { lines.splice(Number(button.dataset.index), 1); renderLines(); };
     });
   };
+  // Shopify-style picker: variant-level rows with checkboxes so several products
+  // can be added in one go. A single exact barcode/SKU hit (i.e. a scan) is
+  // added immediately so scanning stays one motion.
+  const addRows = (rows) => {
+    const reason = $('#draft-reason').selectedOptions[0];
+    const delta = reason?.dataset.direction === 'out' ? -1 : 1;
+    let added = 0;
+    for (const row of rows) {
+      if (lines.some((line) => line.itemId === row.id)) continue;
+      lines.push({ itemId: row.id, ...row, available: Number(row.available), delta });
+      added++;
+    }
+    $('#draft-search-results').innerHTML = '';
+    $('#draft-item-search').value = '';
+    $('#draft-item-search').focus();
+    renderLines();
+    return added;
+  };
   const findItems = async () => {
     const term = $('#draft-item-search').value.trim();
     if (!term) return;
     $('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
     try {
       const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
-      $('#draft-search-results').innerHTML = result.rows.length ? `<div class="search-results">${result.rows.map((row) => `
-        <button class="search-result" data-item="${row.id}">
-          <span><strong>${productName(row)}</strong>${codeMeta(row)}</span><span>Available <strong>${row.available}</strong> · 添加</span>
-        </button>`).join('')}</div>` : '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
-      document.querySelectorAll('.search-result').forEach((button) => {
-        button.onclick = () => {
-          const row = result.rows.find((item) => item.id === Number(button.dataset.item));
-          if (lines.some((line) => line.itemId === row.id)) return alert('该商品已在调整明细中');
-          const reason = $('#draft-reason').selectedOptions[0];
-          const delta = reason?.dataset.direction === 'out' ? -1 : 1;
-          lines.push({ itemId: row.id, ...row, available: Number(row.available), delta });
-          $('#draft-search-results').innerHTML = '';
-          $('#draft-item-search').value = '';
-          renderLines();
-        };
-      });
+      if (!result.rows.length) {
+        $('#draft-search-results').innerHTML = '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
+        return;
+      }
+      // Barcode/SKU scan → add straight away.
+      const exact = result.rows.filter((r) => r.barcode === term || r.sku === term);
+      if (exact.length === 1) {
+        if (!addRows(exact)) alert('该商品已在调整明细中');
+        return;
+      }
+      $('#draft-search-results').innerHTML = `
+        <div class="picker-panel">
+          <div class="picker-head">
+            <label><input type="checkbox" id="picker-all"> 全选（${result.rows.length}）</label>
+            <button id="picker-add" class="small-button" disabled>加入所选</button>
+          </div>
+          <div class="search-results">${result.rows.map((row) => `
+            <label class="search-result picker-row ${lines.some((l) => l.itemId === row.id) ? 'already' : ''}">
+              <input type="checkbox" class="picker-check" value="${row.id}" ${lines.some((l) => l.itemId === row.id) ? 'disabled' : ''}>
+              <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}${codeMeta(row)}</span>
+              <span class="picker-avail">${lines.some((l) => l.itemId === row.id) ? '已添加' : `Available <strong>${row.available}</strong>`}</span>
+            </label>`).join('')}</div>
+        </div>`;
+      const checks = [...document.querySelectorAll('.picker-check:not([disabled])')];
+      const refresh = () => {
+        const n = checks.filter((c) => c.checked).length;
+        $('#picker-add').disabled = !n;
+        $('#picker-add').textContent = n ? `加入所选（${n}）` : '加入所选';
+      };
+      checks.forEach((c) => { c.onchange = refresh; });
+      $('#picker-all').onchange = (e) => { checks.forEach((c) => { c.checked = e.target.checked; }); refresh(); };
+      $('#picker-add').onclick = () => {
+        const ids = checks.filter((c) => c.checked).map((c) => Number(c.value));
+        addRows(result.rows.filter((r) => ids.includes(r.id)));
+      };
     } catch (error) { $('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
   };
   $('#draft-item-find').onclick = findItems;
