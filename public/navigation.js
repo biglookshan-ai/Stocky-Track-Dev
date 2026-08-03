@@ -1,6 +1,6 @@
 (function installInventoryNavigation(root) {
   const STATE_KEY = 'inventoryNavigation';
-  const STORAGE_PREFIX = 'inventoryNavigation:';
+  const STORAGE_KEY = 'inventoryNavigationStack:v2';
   const PLATFORM_PARAMS = new Set([
     'embedded', 'hmac', 'host', 'id_token', 'locale', 'session', 'shop', 'timestamp',
   ]);
@@ -34,66 +34,99 @@
     locationImpl = root.location,
     storageImpl = root.sessionStorage,
   } = {}) {
-    let navigationId = null;
-    let maxDepth = 0;
+    let entries = [];
+    let index = 0;
 
-    const meta = () => historyImpl.state?.[STATE_KEY] || null;
-    const newNavigationId = () => root.crypto?.randomUUID?.()
-      || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const readMaxDepth = (id) => {
+    const readStack = () => {
       try {
-        const value = Number.parseInt(storageImpl?.getItem(`${STORAGE_PREFIX}${id}`), 10);
-        return Number.isInteger(value) && value >= 0 ? value : 0;
-      } catch { return 0; }
+        const value = JSON.parse(storageImpl?.getItem(STORAGE_KEY) || 'null');
+        if (!Array.isArray(value?.entries) || !value.entries.length || !Number.isInteger(value.index)) return null;
+        const storedEntries = value.entries
+          .filter((route) => typeof route === 'string')
+          .map((route) => normalize(route, locationImpl.href));
+        if (!storedEntries.length) return null;
+        return {
+          entries: storedEntries,
+          index: Math.min(Math.max(value.index, 0), storedEntries.length - 1),
+        };
+      } catch { return null; }
     };
-    const saveMaxDepth = () => {
-      try { storageImpl?.setItem(`${STORAGE_PREFIX}${navigationId}`, String(maxDepth)); }
-      catch { /* History still works in-memory when storage is unavailable. */ }
+    const saveStack = () => {
+      try { storageImpl?.setItem(STORAGE_KEY, JSON.stringify({ entries, index })); }
+      catch { /* Navigation still works in-memory when storage is unavailable. */ }
     };
-    const stateAtDepth = (depth) => ({
+    const stateAtIndex = () => ({
       ...(historyImpl.state && typeof historyImpl.state === 'object' ? historyImpl.state : {}),
-      [STATE_KEY]: { id: navigationId, depth },
+      [STATE_KEY]: { index },
     });
+    const closestEntryIndex = (route) => entries.reduce((closest, entry, candidate) => {
+      if (entry !== route) return closest;
+      if (closest < 0) return candidate;
+      return Math.abs(candidate - index) < Math.abs(closest - index) ? candidate : closest;
+    }, -1);
 
     const initialize = () => {
       const route = routeFromLocation(locationImpl);
-      const currentMeta = meta();
-      navigationId = currentMeta?.id || newNavigationId();
-      const depth = Number.isInteger(currentMeta?.depth) ? currentMeta.depth : 0;
-      // Shopify can reload the embedded frame while moving through top-level
-      // Admin history. sessionStorage survives that reload, so keep the known
-      // furthest entry and make Forward available again on the restored page.
-      maxDepth = Math.max(maxDepth, depth, readMaxDepth(navigationId));
-      saveMaxDepth();
-      historyImpl.replaceState(stateAtDepth(depth), '', route);
+      const stored = readStack();
+      if (stored) {
+        entries = stored.entries;
+        index = stored.index;
+        if (entries[index] !== route) {
+          const matchingIndex = closestEntryIndex(route);
+          if (matchingIndex >= 0) index = matchingIndex;
+          else {
+            entries = [...entries.slice(0, index + 1), route];
+            index = entries.length - 1;
+          }
+        }
+      } else {
+        entries = [route];
+        index = 0;
+      }
+      saveStack();
+      historyImpl.replaceState(stateAtIndex(), '', route);
       return route;
     };
 
     const navigate = (value, { replace = false } = {}) => {
       const target = normalize(value, locationImpl.href);
       const current = routeFromLocation(locationImpl);
-      const currentDepth = Number.isInteger(meta()?.depth) ? meta().depth : 0;
       if (replace || target === current) {
-        historyImpl.replaceState(stateAtDepth(currentDepth), '', target);
+        entries[index] = target;
+        saveStack();
+        historyImpl.replaceState(stateAtIndex(), '', target);
       } else {
-        const nextDepth = currentDepth + 1;
-        historyImpl.pushState(stateAtDepth(nextDepth), '', target);
-        maxDepth = nextDepth;
-        saveMaxDepth();
+        entries = [...entries.slice(0, index + 1), target];
+        index = entries.length - 1;
+        saveStack();
+        historyImpl.pushState(stateAtIndex(), '', target);
       }
       return target;
     };
 
-    const canGoBack = () => Number(meta()?.depth || 0) > 0;
-    const canGoForward = () => Number(meta()?.depth || 0) < maxDepth;
+    const canGoBack = () => index > 0;
+    const canGoForward = () => index < entries.length - 1;
 
     const back = (fallback = '/dashboard') => {
-      if (canGoBack()) historyImpl.back();
-      else navigate(fallback, { replace: true });
+      if (canGoBack()) index -= 1;
+      else {
+        const target = normalize(fallback, locationImpl.href);
+        if (target === entries[index]) return target;
+        entries = [target, ...entries];
+      }
+      const target = entries[index];
+      saveStack();
+      historyImpl.replaceState(stateAtIndex(), '', target);
+      return target;
     };
 
     const forward = () => {
-      if (canGoForward()) historyImpl.forward();
+      if (!canGoForward()) return routeFromLocation(locationImpl);
+      index += 1;
+      const target = entries[index];
+      saveStack();
+      historyImpl.replaceState(stateAtIndex(), '', target);
+      return target;
     };
 
     return {

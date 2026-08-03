@@ -85,11 +85,15 @@ test('navigation records support back and forward in the actual visit order', ()
 
 test('direct detail-page back uses the safe parent fallback', () => {
   const browser = fakeBrowser('/items/42');
-  const navigation = create({ historyImpl: browser.history, locationImpl: browser.location });
+  const storage = fakeStorage();
+  const navigation = create({ historyImpl: browser.history, locationImpl: browser.location, storageImpl: storage });
   navigation.initialize();
   navigation.back('/items');
   assert.equal(routeFromLocation(browser.location), '/items');
   assert.equal(browser.entries.length, 1);
+  assert.equal(navigation.canGoForward(), true);
+  navigation.forward();
+  assert.equal(routeFromLocation(browser.location), '/items/42');
 });
 
 test('replacing detail controls keeps the list as the previous page', () => {
@@ -104,7 +108,7 @@ test('replacing detail controls keeps the list as the previous page', () => {
   assert.equal(routeFromLocation(browser.location), '/items/42?trend=committed');
 });
 
-test('forward availability survives an embedded-frame reload after going back', () => {
+test('full navigation stack survives Shopify replacing the embedded frame', () => {
   const browser = fakeBrowser('/items?q=arcana&page=2');
   const storage = fakeStorage();
   const firstLoad = create({
@@ -114,17 +118,63 @@ test('forward availability survives an embedded-frame reload after going back', 
   });
   firstLoad.initialize();
   firstLoad.navigate('/items/42');
-  firstLoad.back();
 
-  const reloaded = create({
+  // Shopify reloads the iframe at every route and does not preserve the
+  // frame's history.state. Build a three-page visit across those reloads.
+  browser.history.state = null;
+  const detailFrame = create({
     historyImpl: browser.history,
     locationImpl: browser.location,
     storageImpl: storage,
   });
-  reloaded.initialize();
-  assert.equal(reloaded.canGoForward(), true);
-  reloaded.forward();
+  detailFrame.initialize();
+  assert.equal(detailFrame.canGoBack(), true);
+  detailFrame.navigate('/history/99');
+
+  browser.history.state = null;
+  const historyFrame = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  historyFrame.initialize();
+  historyFrame.back();
   assert.equal(routeFromLocation(browser.location), '/items/42');
+  assert.equal(historyFrame.canGoForward(), true);
+
+  browser.history.state = null;
+  const reloadedDetailFrame = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  reloadedDetailFrame.initialize();
+  assert.equal(reloadedDetailFrame.canGoForward(), true);
+  reloadedDetailFrame.back();
+  assert.equal(routeFromLocation(browser.location), '/items?q=arcana&page=2');
+
+  browser.history.state = null;
+  const listFrame = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  listFrame.initialize();
+  assert.equal(listFrame.canGoForward(), true);
+  listFrame.forward();
+  assert.equal(routeFromLocation(browser.location), '/items/42');
+
+  browser.history.state = null;
+  const forwardDetailFrame = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  forwardDetailFrame.initialize();
+  assert.equal(forwardDetailFrame.canGoBack(), true);
+  assert.equal(forwardDetailFrame.canGoForward(), true);
+  forwardDetailFrame.forward();
+  assert.equal(routeFromLocation(browser.location), '/history/99');
 });
 
 test('cleanSearch retains page state but removes embedded-app bootstrap values', () => {

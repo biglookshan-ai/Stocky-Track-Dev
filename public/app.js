@@ -2115,16 +2115,24 @@ document.addEventListener('click', (event) => {
   event.preventDefault();
   const target = `${url.pathname}${url.search}`;
   if (anchor.hasAttribute('data-app-back')) {
-    const hasPreviousPage = navigationController.canGoBack();
     navigationController.back(target);
-    if (!hasPreviousPage) route();
+    syncNavigationControls();
+    route();
     return;
   }
   navigateTo(target);
 }, true);
 
-$('#app-back').onclick = () => navigationController.back(parentRoute() || '/dashboard');
-$('#app-forward').onclick = () => navigationController.forward();
+$('#app-back').onclick = () => {
+  navigationController.back(parentRoute() || '/dashboard');
+  syncNavigationControls();
+  route();
+};
+$('#app-forward').onclick = () => {
+  navigationController.forward();
+  syncNavigationControls();
+  route();
+};
 $('#global-search').onsubmit = (event) => {
   event.preventDefault();
   const query = $('#global-search-input').value.trim();
