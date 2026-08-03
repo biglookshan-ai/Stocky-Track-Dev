@@ -1,0 +1,19 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "e4f7da745f13dc1173be680ee853a525"
+name = "Stock Track CGP"
+handle = "stock-track-cgp"
+application_url = "https://stocky-track-dev-production.up.railway.app"
+embedded = true
+
+[webhooks]
+api_version = "2026-07"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_fulfillments,write_inventory,read_inventory_shipments,read_inventory_shipments_received_items,read_inventory_transfers,read_locations,read_orders,read_products,read_reports"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ ]

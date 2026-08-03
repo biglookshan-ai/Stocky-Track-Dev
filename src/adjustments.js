@@ -8,7 +8,7 @@ import {
 } from './adjustment-core.js';
 import { listAdjustmentAttachments } from './adjustment-attachments.js';
 
-const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'stocky-track-dev';
+const APP_HANDLE = process.env.SHOPIFY_APP_HANDLE || 'stock-track-cgp';
 
 async function transaction(fn) {
   const client = await pool.connect();

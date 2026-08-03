@@ -1,7 +1,7 @@
-# CGP Inventory（Stocky Track Dev）完整交接文档
+# CGP Inventory（Stock Track CGP）完整交接文档
 
-> 最后核对：2026-07-31  
-> 代码基线：`main` / `6ac9b11 fix: keep inventory history authoritative`  
+> 最后核对：2026-08-04
+> 代码基线：`main` / `6ac9b11 fix: keep inventory history authoritative`
 > 当前阶段：开发中，真实库存记录模式进入验收，整体进度约 95%
 
 本文档用于把项目完整交给下一位开发者或 AI。它记录当前产品目标、已上线功能、真实数据口径、系统架构、数据库、API、部署、测试、开发演进、已知限制和下一步计划。
@@ -21,8 +21,8 @@
 
 | 项目 | 内容 |
 |---|---|
-| 显示名 | Inventory / CGP Inventory |
-| Shopify App 名称 | Stocky Track Dev |
+| 显示名 | Stock Track CGP |
+| Shopify App 名称 | Stock Track CGP |
 | 项目 slug | `inventory` |
 | 分类 | Shopify App |
 | 本地路径 | `~/Vibe Coding Dev/Shopify App/inventory-app` |
@@ -31,7 +31,7 @@
 | 生产托管 | Railway |
 | 已知生产域名 | `https://stocky-track-dev-production.up.railway.app` |
 | Shopify 店铺 | `cinegearpro.myshopify.com` |
-| App handle | `stocky-track-dev` |
+| App handle | `stock-track-cgp` |
 | Node 版本 | Node.js 18+ |
 | 数据库 | Railway PostgreSQL |
 | 附件存储 | Railway Volume，生产挂载到 `/data` |
@@ -792,7 +792,7 @@ Shopify API `2026-04` 不支持旧的 `INVENTORY_TRANSFERS_UPDATED` topic；不�
 | `PORT` | Railway 注入 | 默认 3000 |
 | `PGSSLMODE` | 视数据库而定 | `require` 时启用 SSL |
 | `SHOPIFY_ADMIN_TOKEN` | 仅调试 | 固定 token 覆盖 token exchange，不建议生产长期设置 |
-| `SHOPIFY_APP_HANDLE` | 否 | 默认 `stocky-track-dev` |
+| `SHOPIFY_APP_HANDLE` | 否 | 默认 `stock-track-cgp` |
 
 `SHOPIFY_API_SECRET` 同时用于解密数据库中的 offline token。更换 Secret 后，旧 ciphertext 无法解密，必须重新从 Embedded App 触发 token exchange。
 
