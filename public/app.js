@@ -1677,13 +1677,9 @@ async function viewAdjustmentForm(id = null) {
           ${id ? `<div id="existing-attachments">${attachmentListHtml(adjustment.attachments, true)}</div>` : ''}
         </div>
       </div>
-      <div class="section-heading"><div><h2>调整明细</h2><p class="muted compact">选择 − 或 +，再输入变化数量；After 会根据当前 Available 自动计算。</p></div></div>
+      <div class="section-heading adjustment-lines-heading"><div><h2>调整明细</h2><p class="muted compact">加入的商品会显示在这里；选择 − 或 +，再输入变化数量。</p></div>
+        <button id="draft-item-open" type="button">添加商品</button></div>
       <div id="draft-lines"></div>
-      <div class="item-picker">
-        <div><h2>添加商品</h2><p class="muted compact">扫描条码，或输入 Barcode / SKU / 标题 / Brand（可用空格分词，如「dzofilm arles 100mm」）。勾选后可一次加入多个变体。</p></div>
-        <div class="picker-search"><input id="draft-item-search" type="search" placeholder="扫描或输入 Barcode / SKU / 商品"><button id="draft-item-find" class="secondary">搜索</button></div>
-      </div>
-      <div id="draft-search-results"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `/adjustments/${id}` : '/adjustments'}" data-app-back>取消</a><button id="save-draft">保存 Draft</button></div>
     </div>`;
 
@@ -1782,8 +1778,7 @@ async function viewAdjustmentForm(id = null) {
     });
   };
   // Shopify-style picker: variant-level rows with checkboxes so several products
-  // can be added in one go. A single exact barcode/SKU hit (i.e. a scan) is
-  // added immediately so scanning stays one motion.
+  // can be added in one go.
   const addRows = (rows) => {
     const reason = $('#draft-reason').selectedOptions[0];
     const delta = reason?.dataset.direction === 'out' ? -1 : 1;
@@ -1793,71 +1788,85 @@ async function viewAdjustmentForm(id = null) {
       lines.push({ itemId: row.id, ...row, available: Number(row.available), delta });
       added++;
     }
-    $w('#draft-search-results').innerHTML = '';
-    $('#draft-item-search').value = '';
-    $('#draft-item-search').focus();
     renderLines();
     return added;
   };
-  const findItems = async () => {
-    const term = $('#draft-item-search').value.trim();
-    if (!term) return;
-    $w('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
-    try {
-      const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
-      $w('#draft-search-results').innerHTML = '';
-      if (!result.rows.length) {
-        $w('#draft-search-results').innerHTML = '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
-        return;
-      }
-      // Barcode/SKU scan → add straight away, no dialog.
-      const exact = result.rows.filter((r) => r.barcode === term || r.sku === term);
-      if (exact.length === 1 && !lines.some((l) => l.itemId === exact[0].id)) {
-        addRows(exact);
-        return;
-      }
-      openPicker(result.rows, term);
-    } catch (error) { $w('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
-  };
 
-  // Modal picker so results never push the page around. Items already in the
-  // draft show up pre-checked and disabled — no alert needed.
-  const openPicker = (rows, term) => {
+  // Search and results live in one modal. The form itself only exposes a clear
+  // “添加商品” action, while the adjustment lines remain the source of truth.
+  const openPicker = () => {
     const inDraft = (id) => lines.some((l) => l.itemId === id);
     const dialog = document.createElement('div');
     dialog.className = 'modal-backdrop';
     dialog.innerHTML = `
       <div class="modal" role="dialog" aria-modal="true" aria-label="选择商品">
         <div class="modal-head">
-          <strong>选择商品</strong>
-          <span class="muted small">「${esc(term)}」共 ${rows.length} 个变体</span>
+          <strong>添加商品</strong>
+          <span class="muted small" id="picker-summary">按 Barcode、SKU、商品标题或 Brand 搜索</span>
           <button class="icon-button" id="picker-close" aria-label="关闭">×</button>
         </div>
-        <div class="modal-toolbar">
+        <div class="modal-search">
+          <input id="picker-search" type="search" placeholder="输入 Barcode / SKU / 商品 / Brand" autocomplete="off">
+          <button id="picker-find" type="button">搜索</button>
+        </div>
+        <div class="modal-toolbar" id="picker-toolbar" hidden>
           <label><input type="checkbox" id="picker-all"> 全选</label>
           <span class="muted small" id="picker-count"></span>
         </div>
-        <div class="modal-body">${rows.map((row) => `
-          <label class="picker-row ${inDraft(row.id) ? 'already' : ''}">
-            <input type="checkbox" class="picker-check" value="${row.id}" ${inDraft(row.id) ? 'checked disabled' : ''}>
-            <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}<span class="picker-codes">${esc(row.barcode || '—')}${row.sku ? ` · ${esc(row.sku)}` : ''}${row.vendor ? ` · ${esc(row.vendor)}` : ''}</span></span>
-            <span class="picker-avail">${inDraft(row.id) ? '已加入' : `Available <strong>${row.available}</strong>`}</span>
-          </label>`).join('')}</div>
+        <div class="modal-body" id="picker-results"><div class="picker-empty">输入搜索内容，然后点击“搜索”。</div></div>
         <div class="modal-foot">
           <button class="secondary" id="picker-cancel">取消</button>
           <button id="picker-add" disabled>加入所选</button>
         </div>
       </div>`;
     document.body.appendChild(dialog);
-    const close = () => dialog.remove();
-    const checks = [...dialog.querySelectorAll('.picker-check:not([disabled])')];
+    let resultRows = [];
+    let checks = [];
+    const onKey = (event) => { if (event.key === 'Escape') close(); };
+    const close = () => {
+      document.removeEventListener('keydown', onKey);
+      dialog.remove();
+    };
     const refresh = () => {
       const n = checks.filter((c) => c.checked).length;
       dialog.querySelector('#picker-add').disabled = !n;
       dialog.querySelector('#picker-add').textContent = n ? `加入所选（${n}）` : '加入所选';
       dialog.querySelector('#picker-count').textContent = `已选 ${n} / 可选 ${checks.length}`;
+      dialog.querySelector('#picker-all').checked = Boolean(checks.length) && n === checks.length;
     };
-    checks.forEach((c) => { c.onchange = refresh; });
+    const showRows = (rows, term) => {
+      resultRows = rows;
+      dialog.querySelector('#picker-summary').textContent = `「${term}」共 ${rows.length} 个变体`;
+      dialog.querySelector('#picker-toolbar').hidden = !rows.length;
+      dialog.querySelector('#picker-results').innerHTML = rows.length ? rows.map((row) => `
+        <label class="picker-row ${inDraft(row.id) ? 'already' : ''}">
+          <input type="checkbox" class="picker-check" value="${row.id}" ${inDraft(row.id) ? 'checked disabled' : ''}>
+          <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}<span class="picker-codes">${esc(row.barcode || '—')}${row.sku ? ` · ${esc(row.sku)}` : ''}${row.vendor ? ` · ${esc(row.vendor)}` : ''}</span></span>
+          <span class="picker-avail">${inDraft(row.id) ? '已加入' : `Available <strong>${row.available}</strong>`}</span>
+        </label>`).join('') : '<div class="picker-empty">该仓位没有匹配且可调整的商品。</div>';
+      checks = [...dialog.querySelectorAll('.picker-check:not([disabled])')];
+      checks.forEach((checkbox) => { checkbox.onchange = refresh; });
+      refresh();
+    };
+    const findItems = async () => {
+      const input = dialog.querySelector('#picker-search');
+      const button = dialog.querySelector('#picker-find');
+      const term = input.value.trim();
+      if (!term) { input.focus(); return; }
+      button.disabled = true;
+      dialog.querySelector('#picker-toolbar').hidden = true;
+      dialog.querySelector('#picker-results').innerHTML = '<div class="picker-empty">搜索中…</div>';
+      try {
+        const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
+        showRows(result.rows, term);
+      } catch (error) {
+        resultRows = [];
+        checks = [];
+        dialog.querySelector('#picker-summary').textContent = '搜索失败';
+        dialog.querySelector('#picker-results').innerHTML = `<div class="picker-empty error">${esc(error.message)}</div>`;
+        refresh();
+      } finally { button.disabled = false; }
+    };
     dialog.querySelector('#picker-all').onchange = (e) => {
       checks.forEach((c) => { c.checked = e.target.checked; });
       refresh();
@@ -1865,18 +1874,20 @@ async function viewAdjustmentForm(id = null) {
     dialog.querySelector('#picker-close').onclick = close;
     dialog.querySelector('#picker-cancel').onclick = close;
     dialog.onclick = (e) => { if (e.target === dialog) close(); };
-    document.addEventListener('keydown', function onKey(e) {
-      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    });
+    document.addEventListener('keydown', onKey);
+    dialog.querySelector('#picker-find').onclick = findItems;
+    dialog.querySelector('#picker-search').onkeydown = (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); findItems(); }
+    };
     dialog.querySelector('#picker-add').onclick = () => {
       const ids = checks.filter((c) => c.checked).map((c) => Number(c.value));
-      addRows(rows.filter((r) => ids.includes(r.id)));
+      addRows(resultRows.filter((r) => ids.includes(r.id)));
       close();
     };
     refresh();
+    dialog.querySelector('#picker-search').focus();
   };
-  $('#draft-item-find').onclick = findItems;
-  $('#draft-item-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') findItems(); });
+  $('#draft-item-open').onclick = openPicker;
   $('#draft-reason').onchange = () => {
     lines.forEach(normalizeLineDirection);
     renderLines();
@@ -1907,7 +1918,6 @@ async function viewAdjustmentForm(id = null) {
   $('#draft-location').onchange = () => {
     if (!lines.length || confirm('更改仓位会清空当前调整明细，是否继续？')) {
       lines = [];
-      $w('#draft-search-results').innerHTML = '';
       renderLines();
     } else {
       $('#draft-location').value = String(adjustment?.lines?.[0]?.location_id || options.locations[0]?.id || '');
