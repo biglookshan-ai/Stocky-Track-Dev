@@ -1794,14 +1794,15 @@ async function viewAdjustment(id) {
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>调整明细</h2><p class="muted compact">共 ${adjustment.lines.length} 个商品/仓位；数量均为 Available。${stockyOriginalNo(adjustment.display_number) ? 'Stocky 导出不含调整前/后数量，故 Before/After 显示为 —。' : ''}</p></div></div>
-      <div class="table-scroll"><table class="adjustment-lines">
-        <thead><tr><th>商品</th><th>规格</th><th>Barcode / SKU</th><th class="num">Before</th><th class="num">Change</th><th class="num">After</th></tr></thead>
+      <div class="table-scroll"><table class="adjustment-lines detail-lines">
+        <colgroup><col><col class="w-variant"><col class="w-code"><col class="w-n"><col class="w-n"><col class="w-n"></colgroup>
+        <thead><tr><th>商品</th><th>变体规格</th><th>Barcode / SKU</th><th>Before</th><th>Change</th><th>After</th></tr></thead>
         <tbody>${adjustment.lines.length ? adjustment.lines.map((line) => `<tr>
           <td><a class="item-link" href="#/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">已删除</span>' : ''}</td>
           <td>${variantLabel(line) || '<span class="muted">—</span>'}</td>
           <td><strong>${esc(line.barcode || '—')}</strong>${line.sku ? `<div class="muted small">${esc(line.sku)}</div>` : ''}</td>
-          <td class="num">${numOrDash(line.qty_before)}</td><td class="num"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
-          <td class="num"><strong>${numOrDash(line.qty_after)}</strong>${adjustment.status === 'draft' && line.qty_before !== null && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">当前 ${line.current_available}，提交时会重新校验</div>` : ''}</td>
+          <td class="col-n">${numOrDash(line.qty_before)}</td><td class="col-n"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
+          <td class="col-n"><strong>${numOrDash(line.qty_after)}</strong>${adjustment.status === 'draft' && line.qty_before !== null && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">当前 ${line.current_available}，提交时会重新校验</div>` : ''}</td>
         </tr>`).join('') : '<tr><td colspan="6" class="muted">此调整单没有商品明细（导入时商品无法识别）</td></tr>'}</tbody>
       </table></div>
       <div class="adjustment-evidence">

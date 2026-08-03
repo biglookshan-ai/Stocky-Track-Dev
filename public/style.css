@@ -385,12 +385,21 @@ details.card[open] summary { margin-bottom: 12px; }
 button.search-result { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 10px 12px; color: var(--text); background: #fff; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; text-align: left; }
 button.search-result:last-child { border-bottom: 0; }
 button.search-result:hover { background: #fafbfb; }
-.adjustment-lines { min-width: 760px; }
+.adjustment-lines { min-width: 720px; }
+/* Detail view only: fixed layout driven by the colgroup, so the product name
+   takes the slack and the numeric columns stay compact. The draft editor uses
+   the same class but has different columns, hence the extra .detail-lines. */
+.detail-lines { table-layout: fixed; }
+.detail-lines col.w-variant { width: 128px; }
+.detail-lines col.w-code { width: 132px; }
+.detail-lines col.w-n { width: 74px; }
+.detail-lines .col-n { text-align: left; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.detail-lines th { white-space: nowrap; }
 /* Numeric columns share one width so Before/Change/After line up exactly. */
-.adjustment-lines th.num, .adjustment-lines td.num { width: 110px; white-space: nowrap; }
+
 .adjustment-lines td.num, .adjustment-lines th.num { vertical-align: middle; }
 .adjustment-lines td { vertical-align: middle; }
-.adjustment-lines th:first-child { width: 60%; }
+
 .adjustment-lines .delta-input { width: 100px; text-align: right; }
 .delta-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; line-height: 1; }
 .delta-control button { padding: 4px 9px; line-height: 1; height: 30px; }
