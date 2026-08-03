@@ -1303,6 +1303,10 @@ async function viewAdjustments() {
     params.set('limit', '25');
     const result = await api(`/adjustments?${params}`);
     $w('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
+      <colgroup>
+        <col class="w-no"><col><col class="w-person"><col class="w-loc">
+        <col class="w-qty"><col class="w-qty"><col class="w-date"><col class="w-status">
+      </colgroup>
       <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
         <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a>${stockyTag(row.display_number)}</td>

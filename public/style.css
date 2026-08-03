@@ -321,19 +321,24 @@ details.card[open] summary { margin-bottom: 12px; }
 .missing-state-note { max-width: 340px; margin-top: 5px; color: var(--sub); font-size: 11px; line-height: 1.4; }
 .adjustment-filters { display: grid; grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto; gap: 10px; margin-bottom: 12px; }
 .adjustment-filters input { width: 100%; }
-/* Adjustment list: the notes column gets the space; everything else is sized
-   to its actual content so rows stay on one line. */
-.adjustments-table { min-width: 900px; table-layout: fixed; }
+/* Adjustment list. With table-layout:fixed the widths MUST come from a
+   colgroup (or the first row) — putting them only on <td> lets the browser
+   distribute columns evenly, which is what squeezed the notes column. The
+   unsized second <col> soaks up all remaining width for the notes. */
+.adjustments-table { min-width: 880px; table-layout: fixed; }
 .adjustments-table th, .adjustments-table td { padding: 10px 10px; }
-.adjustments-table .col-no { width: 96px; white-space: nowrap; }
+.adjustments-table col.w-no { width: 92px; }
+.adjustments-table col.w-person { width: 76px; }
+.adjustments-table col.w-loc { width: 96px; }
+.adjustments-table col.w-qty { width: 46px; }
+.adjustments-table col.w-date { width: 84px; }
+.adjustments-table col.w-status { width: 74px; }
+.adjustments-table .col-no { white-space: nowrap; }
 .adjustments-table .col-no .badge { display: inline-block; margin-left: 4px; font-size: 10px; padding: 0 4px; }
-.adjustments-table .col-note { width: auto; }
 .adjustments-table .col-note .note-main { line-height: 1.5; }
-.adjustments-table .col-person { width: 84px; }
-.adjustments-table .col-loc { width: 104px; font-size: 12px; color: var(--sub); }
-.adjustments-table .col-qty { width: 48px; white-space: nowrap; padding-left: 4px; padding-right: 4px; }
-.adjustments-table .col-date { width: 88px; font-size: 12px; color: var(--sub); white-space: nowrap; }
-.adjustments-table .col-status { width: 78px; }
+.adjustments-table .col-loc { font-size: 12px; color: var(--sub); }
+.adjustments-table .col-qty { white-space: nowrap; padding-left: 4px; padding-right: 4px; }
+.adjustments-table .col-date { font-size: 12px; color: var(--sub); white-space: nowrap; }
 .adjustments-table .col-status .status-pill { font-size: 11px; padding: 1px 7px; }
 .xsmall { font-size: 11px; line-height: 1.4; margin-top: 2px; }
 .row-arrow { color: var(--blue); font-size: 17px; text-decoration: none; padding: 4px 8px; }
