@@ -735,8 +735,29 @@ export async function adjustmentsCsv(filters = {}) {
 // virtual-stock adjustment per item+location.
 export const VIRTUAL_STOCK_REASON = 'Virtual stock adjustment';
 
-export async function listVirtualStock({ term = '', showAll = false } = {}) {
-  const params = [VIRTUAL_STOCK_REASON];
+// The External Warehouse holds no physical stock — anything sellable there is
+// virtual: the listing shows availability and the unit is ordered from the
+// supplier (or pulled out of a larger kit) once a customer buys. So the
+// register is simply "what currently has stock in that warehouse"; no ledger
+// analysis is needed or wanted.
+export const DEFAULT_VIRTUAL_LOCATION = 'External Warehouse';
+
+export async function virtualStockLocations() {
+  const result = await q(`SELECT id, name FROM locations WHERE active ORDER BY
+    (name = $1) DESC, name`, [DEFAULT_VIRTUAL_LOCATION]);
+  return result.rows;
+}
+
+export async function listVirtualStock({ term = '', locationId = null } = {}) {
+  const params = [];
+  let locationClause;
+  if (locationId) {
+    params.push(Number(locationId));
+    locationClause = `l.id = $${params.length}`;
+  } else {
+    params.push(DEFAULT_VIRTUAL_LOCATION);
+    locationClause = `l.name = $${params.length}`;
+  }
   let search = '';
   const clean = String(term || '').trim().slice(0, 80);
   if (clean) {
@@ -747,46 +768,27 @@ export async function listVirtualStock({ term = '', showAll = false } = {}) {
   const result = await q(`
     SELECT i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode, i.source,
            l.id AS location_id, l.name AS location,
-           sum(lg.delta)::int AS net_set,
-           max(lg.occurred_at) AS last_at,
-           (array_agg(lg.notes ORDER BY lg.occurred_at DESC, lg.id DESC)
-              FILTER (WHERE lg.notes IS NOT NULL))[1] AS last_note,
-           (array_agg(adj.id ORDER BY lg.occurred_at DESC, lg.id DESC)
-              FILTER (WHERE adj.id IS NOT NULL))[1] AS last_adjustment_id,
-           (array_agg(adj.display_number ORDER BY lg.occurred_at DESC, lg.id DESC)
-              FILTER (WHERE adj.display_number IS NOT NULL))[1] AS last_adjustment_number,
-           cl.available
-    FROM inventory_ledger lg
-    JOIN items i ON i.id = lg.item_id
-    JOIN locations l ON l.id = lg.location_id
-    LEFT JOIN current_levels cl ON cl.item_id = lg.item_id AND cl.location_id = lg.location_id
-    LEFT JOIN inventory_events e ON e.id = lg.event_id
-    LEFT JOIN adjustments adj ON adj.shopify_group_gid = e.shopify_group_gid
-    WHERE lg.reason_code = $1 AND i.status <> 'deleted' ${search}
-    GROUP BY i.id, l.id, cl.available
-    ORDER BY i.product_title, l.name
-    LIMIT 1000`, params);
-
-  const rows = result.rows.map((row) => {
-    const netSet = Number(row.net_set) || 0;
-    const available = row.available === null || row.available === undefined
-      ? null : Number(row.available);
-    // Selling virtual stock consumes it through an ORDER, not through another
-    // virtual-stock adjustment, so the net of those adjustments only ever grows
-    // and is NOT the amount still outstanding. What is still riding on virtual
-    // stock today is bounded by what is actually sellable right now.
-    const current = available === null ? 0 : Math.max(0, Math.min(available, netSet));
-    return {
-      ...row,
-      net_set: netSet,
-      available,
-      virtual_qty: current,
-      deleted_product: row.source === 'local',
-    };
-  });
-  const visible = showAll ? rows : rows.filter((row) => row.virtual_qty > 0 && !row.deleted_product);
-  return visible.sort((a, b) => b.virtual_qty - a.virtual_qty
-    || String(a.product_title).localeCompare(String(b.product_title)));
+           cl.available::int AS virtual_qty, cl.updated_at,
+           note.occurred_at AS last_at, note.notes AS last_note,
+           note.adjustment_id AS last_adjustment_id,
+           note.display_number AS last_adjustment_number
+    FROM current_levels cl
+    JOIN items i ON i.id = cl.item_id
+    JOIN locations l ON l.id = cl.location_id
+    LEFT JOIN LATERAL (
+      SELECT lg.occurred_at, lg.notes, adj.id AS adjustment_id, adj.display_number
+      FROM inventory_ledger lg
+      LEFT JOIN inventory_events e ON e.id = lg.event_id
+      LEFT JOIN adjustments adj ON adj.shopify_group_gid = e.shopify_group_gid
+      WHERE lg.item_id = cl.item_id AND lg.location_id = cl.location_id
+        AND lg.reason_code = $${params.length + 1}
+      ORDER BY lg.occurred_at DESC, lg.id DESC LIMIT 1
+    ) note ON true
+    WHERE ${locationClause} AND cl.available > 0
+      AND i.status <> 'deleted' ${search}
+    ORDER BY cl.available DESC, i.product_title
+    LIMIT 1000`, [...params, VIRTUAL_STOCK_REASON]);
+  return result.rows;
 }
 
 // Build a draft that reverses the outstanding virtual quantity. A draft (not a
@@ -795,7 +797,7 @@ export async function buildVirtualStockRevokeDraft({ entries, staffId, recordedB
   if (!Array.isArray(entries) || !entries.length) throw new Error('请选择要撤销的虚拟库存');
   const reason = await q('SELECT id FROM adjustment_reasons WHERE name = $1', [VIRTUAL_STOCK_REASON]);
   if (!reason.rowCount) throw new Error(`找不到「${VIRTUAL_STOCK_REASON}」原因，请先在设置中添加`);
-  const all = await listVirtualStock({ showAll: true });
+  const all = await listVirtualStock({});
   const byKey = new Map(all.map((row) => [`${row.item_id}:${row.location_id}`, row]));
   const byLocation = new Map();
   for (const entry of entries) {
