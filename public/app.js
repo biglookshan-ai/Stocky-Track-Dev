@@ -1239,18 +1239,18 @@ async function viewAdjustments() {
             <button id="add-reason" class="secondary small-button">添加</button></div>
         </section>
         <section>
-          <div class="section-heading"><div><h2>员工资料</h2><p class="muted compact">Shopify 账号可映射姓名；共用账号的实际经手员工也可单独建立。</p></div></div>
+          <div class="section-heading"><div><h2>员工</h2><p class="muted compact">调整单里可选的人员名单。带「登录账号」标记的是 Shopify 后台账号，系统自动建立、不可删除。</p></div></div>
           <div class="staff-list">${options.staff.map((person) => `<div class="setting-row">
-            <span class="muted staff-id">${esc(person.shopify_user_id || '—')}</span>
-            <input type="text" value="${esc(person.employee_code || '')}" placeholder="员工编号" data-staff-code="${person.id}">
-            <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}">
+            <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}" aria-label="员工姓名">
+            ${person.shopify_user_id ? '<span class="badge">登录账号</span>' : '<span></span>'}
             <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
-            <button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}" title="删除">删除</button>
-          </div>`).join('') || '<p class="muted">尚无员工资料。</p>'}</div>
+            ${person.shopify_user_id
+              ? '<span class="muted small">不可删除</span>'
+              : `<button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}">删除</button>`}
+          </div>`).join('') || '<p class="muted">尚无员工。</p>'}</div>
           <div class="setting-row new-staff">
-            <span class="muted">本地员工</span>
-            <input id="new-staff-code" type="text" placeholder="员工编号（可选）">
-            <input id="new-staff-name" type="text" placeholder="员工姓名">
+            <input id="new-staff-name" type="text" placeholder="新员工姓名">
+            <span></span><span></span>
             <button id="add-staff" class="secondary small-button">添加</button>
           </div>
         </section>
@@ -1343,7 +1343,6 @@ async function viewAdjustments() {
           method: 'PATCH',
           body: JSON.stringify({
             displayName: $(`[data-staff-name="${button.dataset.id}"]`).value,
-            employeeCode: $(`[data-staff-code="${button.dataset.id}"]`).value,
           }),
         });
         await viewAdjustments();
@@ -1369,7 +1368,6 @@ async function viewAdjustments() {
         method: 'POST',
         body: JSON.stringify({
           displayName: $('#new-staff-name').value,
-          employeeCode: $('#new-staff-code').value,
         }),
       });
       await viewAdjustments();

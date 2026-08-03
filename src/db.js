@@ -14,7 +14,16 @@ export async function initDb() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error('DATABASE_URL not set — the ledger requires Postgres');
   const useSsl = process.env.PGSSLMODE === 'require' || /sslmode=require/i.test(url);
-  pool = new pg.Pool({ connectionString: url, max: 8, ssl: useSsl ? { rejectUnauthorized: false } : false });
+  // Background jobs (history sync, snapshot, import) run long transactions; a
+  // small pool let them starve interactive requests. statement_timeout stops a
+  // single pathological query from blocking a connection indefinitely.
+  pool = new pg.Pool({
+    connectionString: url,
+    max: Number(process.env.PG_POOL_MAX || 16),
+    idleTimeoutMillis: 30000,
+    statement_timeout: Number(process.env.PG_STATEMENT_TIMEOUT_MS || 25000),
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
+  });
   await migrate();
   console.log('[db] connected, migrations applied');
 }

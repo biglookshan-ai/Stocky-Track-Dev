@@ -338,7 +338,8 @@ details.card[open] summary { margin-bottom: 12px; }
 .setting-row input[type=text] { width: 100%; }
 .setting-row label { white-space: nowrap; }
 .new-reason { grid-template-columns: minmax(180px, 1fr) 170px auto; padding-top: 8px; border-top: 1px solid var(--border); }
-.staff-list .setting-row, .new-staff { grid-template-columns: minmax(70px, 90px) minmax(80px, 110px) minmax(110px, 1fr) auto auto; }
+.staff-list .setting-row, .new-staff { grid-template-columns: minmax(140px, 1fr) auto auto auto; align-items: center; }
+.staff-list .badge { justify-self: start; }
 .staff-id { overflow-wrap: anywhere; }
 .form-grid { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(220px, 1fr) minmax(280px, 1.5fr); gap: 12px; margin-bottom: 22px; }
 .form-grid label > span { display: block; margin-bottom: 5px; color: var(--sub); font-size: 11.5px; font-weight: 600; }
@@ -439,6 +440,7 @@ button.search-result:hover { background: #fafbfb; }
 }
 
 /* Delete buttons in settings */
+.setting-row .small-button { min-width: 56px; justify-content: center; }
 button.danger { color: var(--red); border-color: #f0c9c0; }
 button.danger:hover { background: #fdf0ed; }
 
