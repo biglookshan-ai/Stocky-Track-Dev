@@ -154,3 +154,14 @@ test('coveredBySum: different item or location never matches', () => {
 test('coveredBySum: exact single formal row also passes (superset of pass 1)', () => {
   assert.equal(coveredBySum([P('available', 3)], [F('available', 3)]), true);
 });
+
+test('classifyHistorySource: TransferAdjustment by staff is a manual edit', () => {
+  assert.equal(classifyHistorySource({
+    reference_document_type: 'TransferAdjustment',
+    staff_member_name: 'biglook shan',
+  }), 'admin_manual');
+});
+
+test('classifyHistorySource: a real transfer is still a transfer', () => {
+  assert.equal(classifyHistorySource({ reference_document_type: 'InventoryTransfer' }), 'transfer');
+});

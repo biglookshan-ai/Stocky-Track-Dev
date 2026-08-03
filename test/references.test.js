@@ -32,3 +32,19 @@ test('builds Shopify Admin links for supported references', () => {
     'https://admin.shopify.com/store/cinegearpro/inventory/transfers/456',
   );
 });
+
+test('normalizedType: TransferAdjustment is not an InventoryTransfer', () => {
+  // Substring matching used to turn a manual stock edit into a transfer link.
+  assert.equal(canonicalReference({
+    reference_document_type: 'TransferAdjustment',
+    reference_document_id: '19cf7524-82e0-4eab-81a9-05d10a15ad62',
+  }), null);
+});
+
+test('normalizedType: a real transfer still resolves', () => {
+  const ref = canonicalReference({
+    reference_document_type: 'InventoryTransfer',
+    reference_document_id: '10654',
+  });
+  assert.equal(ref.type, 'InventoryTransfer');
+});

@@ -47,7 +47,11 @@ LIMIT ${limit}`;
 export function classifyHistorySource(row) {
   const ref = String(row.reference_document_type || row.reference_document_uri || '').toLowerCase();
   const reason = String(row.inventory_change_reason || '').toLowerCase();
-  if (ref.includes('transfer') || reason.includes('transfer')) return 'transfer';
+  // 'transferadjustment' is a manual stock edit, not a transfer movement — it
+  // must not be badged (or linked) as a transfer.
+  const isTransferAdjustment = ref.includes('transferadjustment') || ref.includes('transfer_adjustment');
+  if (!isTransferAdjustment && (ref.includes('transfer') || reason.includes('transfer'))) return 'transfer';
+  if (isTransferAdjustment) return row.staff_id || row.staff_member_name ? 'admin_manual' : 'adjustment';
   if (ref.includes('order')) return 'order';
   if (reason.includes('stocktake') || reason.includes('stock count')) return 'stocktake';
   if (row.staff_id || row.staff_member_name) return 'admin_manual';

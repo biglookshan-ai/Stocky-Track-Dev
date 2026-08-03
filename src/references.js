@@ -7,11 +7,15 @@ import { graphql } from './shopify.js';
 
 const CACHE_MS = 15 * 60 * 1000;
 
+// Exact matching only. A substring test used to classify 'TransferAdjustment'
+// (what Shopify reports for a manual stock edit made while a transfer exists)
+// as an InventoryTransfer, which produced an /inventory/transfers/<id> link
+// that 404s because the id is not a transfer id.
 function normalizedType(value) {
   const compact = String(value || '').replace(/[^a-z]/gi, '').toLowerCase();
   if (compact === 'order') return 'Order';
-  if (compact.includes('transfer')) return 'InventoryTransfer';
-  if (compact.includes('purchaseorder')) return 'PurchaseOrder';
+  if (compact === 'transfer' || compact === 'inventorytransfer') return 'InventoryTransfer';
+  if (compact === 'purchaseorder') return 'PurchaseOrder';
   return value ? String(value) : null;
 }
 
