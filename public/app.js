@@ -1576,42 +1576,75 @@ async function viewAdjustmentForm(id = null) {
     $('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
     try {
       const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
+      $('#draft-search-results').innerHTML = '';
       if (!result.rows.length) {
         $('#draft-search-results').innerHTML = '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
         return;
       }
-      // Barcode/SKU scan → add straight away.
+      // Barcode/SKU scan → add straight away, no dialog.
       const exact = result.rows.filter((r) => r.barcode === term || r.sku === term);
-      if (exact.length === 1) {
-        if (!addRows(exact)) alert('该商品已在调整明细中');
+      if (exact.length === 1 && !lines.some((l) => l.itemId === exact[0].id)) {
+        addRows(exact);
         return;
       }
-      $('#draft-search-results').innerHTML = `
-        <div class="picker-panel">
-          <div class="picker-head">
-            <label><input type="checkbox" id="picker-all"> 全选（${result.rows.length}）</label>
-            <button id="picker-add" class="small-button" disabled>加入所选</button>
-          </div>
-          <div class="search-results">${result.rows.map((row) => `
-            <label class="search-result picker-row ${lines.some((l) => l.itemId === row.id) ? 'already' : ''}">
-              <input type="checkbox" class="picker-check" value="${row.id}" ${lines.some((l) => l.itemId === row.id) ? 'disabled' : ''}>
-              <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}${codeMeta(row)}</span>
-              <span class="picker-avail">${lines.some((l) => l.itemId === row.id) ? '已添加' : `Available <strong>${row.available}</strong>`}</span>
-            </label>`).join('')}</div>
-        </div>`;
-      const checks = [...document.querySelectorAll('.picker-check:not([disabled])')];
-      const refresh = () => {
-        const n = checks.filter((c) => c.checked).length;
-        $('#picker-add').disabled = !n;
-        $('#picker-add').textContent = n ? `加入所选（${n}）` : '加入所选';
-      };
-      checks.forEach((c) => { c.onchange = refresh; });
-      $('#picker-all').onchange = (e) => { checks.forEach((c) => { c.checked = e.target.checked; }); refresh(); };
-      $('#picker-add').onclick = () => {
-        const ids = checks.filter((c) => c.checked).map((c) => Number(c.value));
-        addRows(result.rows.filter((r) => ids.includes(r.id)));
-      };
+      openPicker(result.rows, term);
     } catch (error) { $('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+  };
+
+  // Modal picker so results never push the page around. Items already in the
+  // draft show up pre-checked and disabled — no alert needed.
+  const openPicker = (rows, term) => {
+    const inDraft = (id) => lines.some((l) => l.itemId === id);
+    const dialog = document.createElement('div');
+    dialog.className = 'modal-backdrop';
+    dialog.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true" aria-label="选择商品">
+        <div class="modal-head">
+          <strong>选择商品</strong>
+          <span class="muted small">「${esc(term)}」共 ${rows.length} 个变体</span>
+          <button class="icon-button" id="picker-close" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-toolbar">
+          <label><input type="checkbox" id="picker-all"> 全选</label>
+          <span class="muted small" id="picker-count"></span>
+        </div>
+        <div class="modal-body">${rows.map((row) => `
+          <label class="picker-row ${inDraft(row.id) ? 'already' : ''}">
+            <input type="checkbox" class="picker-check" value="${row.id}" ${inDraft(row.id) ? 'checked disabled' : ''}>
+            <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}<span class="picker-codes">${esc(row.barcode || '—')}${row.sku ? ` · ${esc(row.sku)}` : ''}${row.vendor ? ` · ${esc(row.vendor)}` : ''}</span></span>
+            <span class="picker-avail">${inDraft(row.id) ? '已加入' : `Available <strong>${row.available}</strong>`}</span>
+          </label>`).join('')}</div>
+        <div class="modal-foot">
+          <button class="secondary" id="picker-cancel">取消</button>
+          <button id="picker-add" disabled>加入所选</button>
+        </div>
+      </div>`;
+    document.body.appendChild(dialog);
+    const close = () => dialog.remove();
+    const checks = [...dialog.querySelectorAll('.picker-check:not([disabled])')];
+    const refresh = () => {
+      const n = checks.filter((c) => c.checked).length;
+      dialog.querySelector('#picker-add').disabled = !n;
+      dialog.querySelector('#picker-add').textContent = n ? `加入所选（${n}）` : '加入所选';
+      dialog.querySelector('#picker-count').textContent = `已选 ${n} / 可选 ${checks.length}`;
+    };
+    checks.forEach((c) => { c.onchange = refresh; });
+    dialog.querySelector('#picker-all').onchange = (e) => {
+      checks.forEach((c) => { c.checked = e.target.checked; });
+      refresh();
+    };
+    dialog.querySelector('#picker-close').onclick = close;
+    dialog.querySelector('#picker-cancel').onclick = close;
+    dialog.onclick = (e) => { if (e.target === dialog) close(); };
+    document.addEventListener('keydown', function onKey(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
+    });
+    dialog.querySelector('#picker-add').onclick = () => {
+      const ids = checks.filter((c) => c.checked).map((c) => Number(c.value));
+      addRows(rows.filter((r) => ids.includes(r.id)));
+      close();
+    };
+    refresh();
   };
   $('#draft-item-find').onclick = findItems;
   $('#draft-item-search').addEventListener('keydown', (event) => { if (event.key === 'Enter') findItems(); });
@@ -1694,7 +1727,7 @@ async function viewAdjustment(id) {
   const total = adjustment.lines.reduce((sum, line) => sum + Number(line.delta), 0);
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
-    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${stockyTag(adjustment.display_number)}</h1><p class="muted">${esc(adjustment.reason || '未填写原因')} · ${esc(adjustment.recorded_by?.name || '未知操作人')} · ${fmtDate(adjustment.applied_at || adjustment.created_at)}</p></div>
+    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${stockyTag(adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
       <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
         ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
@@ -1708,9 +1741,8 @@ async function viewAdjustment(id) {
       <div><span>经手员工 Handled by</span><strong>${esc(adjustment.handled_by?.map((person) => person.name).join(', ') || '—')}</strong></div>
       <div><span>仓位 Location</span><strong>${esc([...new Set(adjustment.lines.map((l) => l.location))].join(', ') || '—')}</strong></div>
       <div><span>合计变化 Total change</span><strong class="${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}">${signed(total)}</strong></div>
-      <div><span>状态 Status ${infoTip('Draft=草稿未提交；Submitting=提交中；Applied=已写入 Shopify（导入的历史单默认此状态）；Archived=已归档')}</span><strong>${adjustmentStatus(adjustment.status)}</strong></div>
-      <div><span>Shopify 登录账号</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
       <div><span>${adjustment.applied_at ? '完成时间 Applied' : '创建时间 Created'}</span><strong>${fmtDate(adjustment.applied_at || adjustment.created_at)}</strong></div>
+      <div><span>Shopify 登录账号</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>调整明细</h2><p class="muted compact">共 ${adjustment.lines.length} 个商品/仓位；数量均为 Available。${stockyOriginalNo(adjustment.display_number) ? 'Stocky 导出不含调整前/后数量，故 Before/After 显示为 —。' : ''}</p></div></div>

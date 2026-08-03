@@ -1265,29 +1265,25 @@ async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
               min(i.sku) AS sku,
               min(i.barcode) AS barcode,
               min(i.vendor) AS vendor,
-              (SELECT a.id FROM adjustments a
-               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_id,
-              (SELECT a.number FROM adjustments a
-               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_number,
-              (SELECT a.display_number FROM adjustments a
-               WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1) AS adjustment_display_number,
-              -- Full product list so multi-variant events can be expanded inline
-              -- instead of forcing a click into the detail page.
-              (SELECT json_agg(p) FROM (
-                 SELECT DISTINCT pi.id, pi.product_title, pi.variant_title,
-                        pi.barcode, pi.sku
-                 FROM inventory_ledger plg JOIN items pi ON pi.id=plg.item_id
-                 WHERE plg.event_id=e.id
-                 ORDER BY pi.product_title, pi.variant_title
-                 LIMIT 50
-               ) p) AS products,
+              adj.id AS adjustment_id, adj.number AS adjustment_number,
+              adj.display_number AS adjustment_display_number,
+              -- Product list for inline expansion of multi-variant events,
+              -- aggregated from the rows already joined (no extra subquery).
+              json_agg(DISTINCT jsonb_build_object(
+                'id', i.id, 'product_title', i.product_title,
+                'variant_title', i.variant_title, 'barcode', i.barcode, 'sku', i.sku
+              )) AS products,
               string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
        FROM inventory_events e
        JOIN inventory_ledger lg ON lg.event_id=e.id
        JOIN items i ON i.id=lg.item_id
        JOIN locations loc ON loc.id=lg.location_id
+       LEFT JOIN LATERAL (
+         SELECT a.id, a.number, a.display_number FROM adjustments a
+         WHERE a.shopify_group_gid = e.shopify_group_gid LIMIT 1
+       ) adj ON true
        WHERE ${where}
-       GROUP BY e.id
+       GROUP BY e.id, adj.id, adj.number, adj.display_number
        ORDER BY e.occurred_at DESC, e.id DESC
        LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
     [...params, pageSize, (page - 1) * pageSize]),

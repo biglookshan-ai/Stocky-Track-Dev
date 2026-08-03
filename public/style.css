@@ -360,6 +360,7 @@ details.card[open] summary { margin-bottom: 12px; }
 .pending-file-remove { display: inline; padding: 0 2px; border: 0; background: transparent; color: var(--sub); font-size: 16px; line-height: 1; }
 .item-picker { display: flex; justify-content: space-between; align-items: flex-end; gap: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
 .picker-search { display: flex; align-items: center; gap: 8px; }
+.picker-search button { white-space: nowrap; flex: 0 0 auto; }
 .picker-search input { width: min(420px, 48vw); }
 .adjustment-form #draft-search-results + .section-heading { margin-top: 18px; }
 .search-results { max-height: 310px; overflow-y: auto; margin: 10px 0 18px; border: 1px solid var(--border); border-radius: 8px; }
@@ -367,9 +368,15 @@ button.search-result { width: 100%; display: flex; justify-content: space-betwee
 button.search-result:last-child { border-bottom: 0; }
 button.search-result:hover { background: #fafbfb; }
 .adjustment-lines { min-width: 760px; }
+/* Numeric columns share one width so Before/Change/After line up exactly. */
+.adjustment-lines th.num, .adjustment-lines td.num { width: 110px; white-space: nowrap; }
+.adjustment-lines td.num, .adjustment-lines th.num { vertical-align: middle; }
+.adjustment-lines td { vertical-align: middle; }
 .adjustment-lines th:first-child { width: 60%; }
 .adjustment-lines .delta-input { width: 100px; text-align: right; }
-.delta-control { display: inline-flex; align-items: center; gap: 4px; }
+.delta-control { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; line-height: 1; }
+.delta-control button { padding: 4px 9px; line-height: 1; height: 30px; }
+.delta-control .delta-input { height: 30px; padding: 4px 6px; }
 .adjustment-lines .delta-control .delta-input { width: 72px; text-align: center; border-radius: 6px; }
 .delta-sign { width: 30px; height: 32px; padding: 0; border-color: var(--border); border-radius: 6px; background: #fff; color: var(--text); font-size: 17px; }
 .delta-sign.active.plus { border-color: var(--green); background: #e7f4ef; color: var(--green); }
@@ -451,3 +458,21 @@ label.search-result.picker-row.already { opacity: .55; cursor: default; }
 details.product-expand > summary { cursor: pointer; list-style: revert; }
 details.product-expand ul.product-lines { margin: 6px 0 4px; padding-left: 18px; }
 details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.5; }
+
+/* Modal product picker */
+.modal-backdrop { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 24px; background: rgba(32,34,35,.45); }
+.modal { display: flex; flex-direction: column; width: min(880px, 100%); max-height: min(80vh, 720px); background: #fff; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.25); overflow: hidden; }
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal-head strong { font-size: 15px; }
+.modal-head .icon-button { margin-left: auto; background: none; border: 0; color: var(--sub); font-size: 20px; line-height: 1; padding: 2px 6px; cursor: pointer; }
+.modal-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; background: #f6f6f7; border-bottom: 1px solid var(--border); }
+.modal-toolbar label { display: flex; align-items: center; gap: 6px; }
+.modal-body { flex: 1 1 auto; overflow-y: auto; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.picker-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.picker-row:last-child { border-bottom: 0; }
+.picker-row:hover { background: #fafbfb; }
+.picker-row.already { opacity: .6; cursor: default; background: #f6f6f7; }
+.picker-main { min-width: 0; }
+.picker-codes { display: block; margin-top: 2px; color: var(--sub); font-size: 11.5px; }
+.picker-avail { white-space: nowrap; color: var(--sub); font-size: 12.5px; }

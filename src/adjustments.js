@@ -40,7 +40,21 @@ async function participantSnapshot(client, person, fallbackStaffId = null) {
   }
   const name = String(person?.name || '').trim().slice(0, 120);
   if (!name) throw new Error('请填写记录员工');
-  return { staffId: null, name };
+  // A hand-typed name becomes a real (local) staff record so it can simply be
+  // picked from the dropdown next time instead of being retyped. Matching is
+  // case-insensitive to avoid kay/Kay duplicates.
+  const existing = await client.query(
+    'SELECT id FROM staff WHERE lower(display_name)=lower($1) LIMIT 1', [name],
+  );
+  if (existing.rowCount) {
+    await client.query('UPDATE staff SET active=true WHERE id=$1', [existing.rows[0].id]);
+    return { staffId: existing.rows[0].id, name };
+  }
+  const created = await client.query(
+    `INSERT INTO staff (shopify_user_id, display_name, role, active)
+     VALUES (NULL, $1, 'member', true) RETURNING id`, [name],
+  );
+  return { staffId: created.rows[0].id, name };
 }
 
 async function saveParticipants(client, adjustmentId, input, loginStaffId, isNew) {
