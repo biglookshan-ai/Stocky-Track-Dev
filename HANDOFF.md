@@ -783,6 +783,8 @@ Shopify API `2026-04` 不支持旧的 `INVENTORY_TRANSFERS_UPDATED` topic；不�
 | `SHOPIFY_API_VERSION` | 是 | 当前 `2026-04` |
 | `SHOP` | 后台任务需要 | `cinegearpro.myshopify.com` |
 | `APP_URL` | Webhook 注册需要 | Railway 公网 URL |
+| `LARK_ADJUSTMENT_WEBHOOK_URL` | 否 | Lark 群自定义机器人 Webhook；留空则不发送调整通知 |
+| `LARK_ADJUSTMENT_WEBHOOK_SECRET` | 否 | 机器人开启签名校验时填写 |
 | `DATABASE_URL` | 是 | Railway Postgres 自动注入 |
 | `DATA_DIR` | 生产附件需要 | `/data` |
 | `SNAPSHOT_HOUR` | 否 | 默认 UTC 03:00 |

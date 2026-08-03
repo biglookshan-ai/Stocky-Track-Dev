@@ -57,6 +57,7 @@ import {
   salesHistoryStart,
   summarizeSalesHistory,
 } from './sales-history.js';
+import { notifyAppliedAdjustmentOnce } from './lark-adjustment-notifier.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -656,12 +657,32 @@ api.put('/adjustments/:id', async (req, res) => {
 api.post('/adjustments/:id/apply', async (req, res) => {
   try {
     if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
-    res.json(await applyAdjustment({
+    const result = await applyAdjustment({
       id: req.params.id,
       ctx: { shop: req.ctx.shop, token: req.ctx.token },
       staffId: req.ctx.staff.id,
-    }));
+    });
+    try {
+      result.larkNotification = await notifyAppliedAdjustmentOnce(result.adjustment);
+    } catch (error) {
+      console.error(`[lark] adjustment ${req.params.id} notification failed:`, error.message);
+      result.larkNotification = { configured: true, sent: false, error: error.message };
+    }
+    res.json(result);
   } catch (e) { res.status(409).json({ error: e.message }); }
+});
+
+api.post('/adjustments/:id/notify-lark', async (req, res) => {
+  try {
+    if (!req.ctx.staff?.id) return res.status(403).json({ error: '无法识别当前 Shopify 员工账号' });
+    const adjustment = await getAdjustment(req.params.id);
+    if (!adjustment) return res.status(404).json({ error: '调整单不存在' });
+    const notification = await notifyAppliedAdjustmentOnce(adjustment);
+    if (!notification.configured) {
+      return res.status(409).json({ error: '尚未配置 Lark 群机器人 Webhook' });
+    }
+    res.json({ notification, adjustment: await getAdjustment(req.params.id) });
+  } catch (e) { res.status(502).json({ error: e.message }); }
 });
 
 api.post('/adjustments/:id/archive', async (req, res) => {

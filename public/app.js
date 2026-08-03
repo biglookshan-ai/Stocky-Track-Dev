@@ -2015,6 +2015,7 @@ async function viewAdjustment(id) {
         ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
       </div></div>
     ${adjustment.apply_error ? `<div class="notice adjustment-error"><strong>上次提交信息：</strong>${esc(adjustment.apply_error)}</div>` : ''}
+    ${adjustment.lark_notify_error ? `<div class="notice adjustment-error"><strong>库存调整已成功，但 Lark 通知发送失败：</strong>${esc(adjustment.lark_notify_error)} <button id="retry-lark-notification" class="secondary">重试发送</button></div>` : ''}
     ${adjustment.notes ? `<div class="card adjustment-notes-card"><span class="field-label">调整备注 Notes</span><p class="notes-body">${esc(adjustment.notes)}</p></div>` : ''}
     <div class="card event-overview adjustment-overview">
       <div><span>调整原因 Reason</span><strong>${esc(adjustment.reason || '—')}</strong></div>
@@ -2053,10 +2054,24 @@ async function viewAdjustment(id) {
     event.target.disabled = true;
     event.target.textContent = '提交中…';
     try {
-      await api(`/adjustments/${id}/apply`, { method: 'POST' });
+      const result = await api(`/adjustments/${id}/apply`, { method: 'POST' });
+      if (result.larkNotification?.error) {
+        alert(`库存调整已成功，但 Lark 通知发送失败：${result.larkNotification.error}`);
+      }
       await viewAdjustment(id);
     } catch (error) {
       alert(`提交失败：${error.message}`);
+      await viewAdjustment(id);
+    }
+  };
+  if ($('#retry-lark-notification')) $('#retry-lark-notification').onclick = async (event) => {
+    event.target.disabled = true;
+    event.target.textContent = '发送中…';
+    try {
+      await api(`/adjustments/${id}/notify-lark`, { method: 'POST' });
+      await viewAdjustment(id);
+    } catch (error) {
+      alert(`Lark 通知发送失败：${error.message}`);
       await viewAdjustment(id);
     }
   };

@@ -67,6 +67,7 @@ On hand 减少才算已出货销量；订单导致的 Available 减少算下单�
 5. 修改 scope 后重新授权/安装应用；再在「首页 → 维护工具」依次运行：**同步商品目录** → **重新注册实时接收**
 6. 在维护工具运行一次「同步 Shopify 最近 180 天」
 7. 之后账本自动记录；每 5 分钟补充完整归因，每日 03:00 UTC 刷新 Shopify 当前库存快照（`SNAPSHOT_HOUR` 可调）
+8. 如需调整单通知，在 Lark 目标群添加「自定义机器人」，把 Webhook 填入 Railway `LARK_ADJUSTMENT_WEBHOOK_URL`；机器人开启签名校验时再填 `LARK_ADJUSTMENT_WEBHOOK_SECRET`。只有成功执行为 Applied 的调整单会发送，Draft 不发送。
 
 首次 180 天历史回填会受 ShopifyQL 分钟配额限制并在后台断点续传；默认每次查询间隔
 16 秒（`SHOPIFYQL_PACE_MS` 可调），启动和恢复时会先补最近记录，再按最多 7 天一批向前读取，

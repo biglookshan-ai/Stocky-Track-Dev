@@ -102,7 +102,7 @@ async function saveParticipants(client, adjustmentId, input, loginStaffId, isNew
 
 function adjustmentReference(shop, id) {
   const handle = String(shop).replace(/\.myshopify\.com$/i, '');
-  return `https://admin.shopify.com/store/${encodeURIComponent(handle)}/apps/${APP_HANDLE}#/adjustments/${id}`;
+  return `https://admin.shopify.com/store/${encodeURIComponent(handle)}/apps/${APP_HANDLE}/adjustments/${id}`;
 }
 
 async function validateAndInsertLines(client, adjustmentId, input) {
