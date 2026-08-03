@@ -26,6 +26,15 @@ function markdown(value, fallback = '—') {
     .replace(/([\\`*_[\]~])/g, '\\$1');
 }
 
+function multilineFieldMarkdown(label, value) {
+  const content = markdown(value).replace(/\r\n?/g, '\n');
+  return `**${label}：** ${content.replace(/\n/g, '\n　　　　')}`;
+}
+
+export function shouldNotifyAdjustment(input) {
+  return input?.notifyLark !== false;
+}
+
 function shortAdjustmentNumber(adjustment) {
   const display = text(adjustment.display_number, '');
   const match = display.match(/^(A\d+)-\d{6}$/i);
@@ -86,7 +95,7 @@ function adjustmentLineMarkdown(adjustment, line, index, configuredShop) {
   return [
     `${index}. **${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
     `   Barcode：${barcodeMarkdown(adjustment, line, configuredShop)} | SKU：${markdown(line.sku)}`,
-    `   ${markdown(line.location)} | Before：**${quantity(line.qty_before)}** · Change：${changeMarkdown(line.delta)} · After：**${quantity(line.qty_after)}**`,
+    `   ${markdown(line.location)} | Change：${changeMarkdown(line.delta)} · Before：**${quantity(line.qty_before)}** · After：**${quantity(line.qty_after)}**`,
   ].join('\n');
 }
 
@@ -139,7 +148,7 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
 
   const sections = [
-    [`**原因：** ${markdown(adjustment.reason)}`, `**备注：** ${markdown(adjustment.notes)}`].join('\n'),
+    [`**原因：** ${markdown(adjustment.reason)}`, multilineFieldMarkdown('备注', adjustment.notes)].join('\n'),
     lines.length
       ? `**调整明细：**\n${adjustmentLineMarkdown(adjustment, lines[0], 1, configuredShop)}`
       : '**调整明细：** —',

@@ -84,6 +84,14 @@ tr:hover td { background: #fafbfb; }
 .button.disabled, button:disabled { opacity: .5; cursor: default; pointer-events: none; }
 .small-button { padding: 5px 9px; font-size: var(--fs-sm); white-space: nowrap; }
 .button-group, .heading-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.notify-toggle {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 36px;
+  padding: 7px 11px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--text); cursor: pointer; white-space: nowrap;
+}
+.notify-toggle:hover { border-color: #b8bdc2; background: #fafbfb; }
+.notify-toggle input { margin: 0; accent-color: var(--green); }
+.notify-toggle:has(input:disabled) { opacity: .5; cursor: default; }
 .subtle-link { color: var(--blue); text-decoration: none; white-space: nowrap; }
 .subtle-link:hover { text-decoration: underline; }
 input[type=search], input[type=text], input[type=number], textarea { padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; width: 320px; font: inherit; }

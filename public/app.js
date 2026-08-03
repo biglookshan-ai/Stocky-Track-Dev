@@ -2012,6 +2012,7 @@ async function viewAdjustment(id) {
     <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
       <div class="button-group">${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
+        ${canApply ? '<label class="notify-toggle" title="取消勾选后只调整 Shopify，不发送 Lark 群通知"><input type="checkbox" id="notify-lark" checked><span>通知</span></label>' : ''}
         ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
       </div></div>
     ${adjustment.apply_error ? `<div class="notice adjustment-error"><strong>上次提交信息：</strong>${esc(adjustment.apply_error)}</div>` : ''}
@@ -2047,14 +2048,19 @@ async function viewAdjustment(id) {
     ${canApply ? '<div class="notice"><strong>提交前确认：</strong>这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。</div>' : ''}`;
   await wireAttachmentActions(id, adjustment.attachments);
   if ($('#apply-adjustment')) $('#apply-adjustment').onclick = async (event) => {
+    const notifyLark = $('#notify-lark')?.checked !== false;
     const message = adjustment.status === 'applying'
-      ? '将使用同一个幂等键安全重试，不会重复调整。是否继续？'
-      : `即将把 ${adjustment.lines.length} 个商品的 Available 库存合计调整 ${signed(total)}。这会真实写入 Shopify，是否确认？`;
+      ? `将使用同一个幂等键安全重试，不会重复调整。${notifyLark ? '成功后会发送 Lark 通知。' : '成功后不发送 Lark 通知。'}是否继续？`
+      : `即将把 ${adjustment.lines.length} 个商品的 Available 库存合计调整 ${signed(total)}。这会真实写入 Shopify，${notifyLark ? '成功后会发送 Lark 通知' : '成功后不发送 Lark 通知'}，是否确认？`;
     if (!confirm(message)) return;
     event.target.disabled = true;
     event.target.textContent = '提交中…';
+    if ($('#notify-lark')) $('#notify-lark').disabled = true;
     try {
-      const result = await api(`/adjustments/${id}/apply`, { method: 'POST' });
+      const result = await api(`/adjustments/${id}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ notifyLark }),
+      });
       if (result.larkNotification?.error) {
         alert(`库存调整已成功，但 Lark 通知发送失败：${result.larkNotification.error}`);
       }

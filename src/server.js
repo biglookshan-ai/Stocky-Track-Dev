@@ -57,7 +57,10 @@ import {
   salesHistoryStart,
   summarizeSalesHistory,
 } from './sales-history.js';
-import { notifyAppliedAdjustmentOnce } from './lark-adjustment-notifier.js';
+import {
+  notifyAppliedAdjustmentOnce,
+  shouldNotifyAdjustment,
+} from './lark-adjustment-notifier.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -662,11 +665,15 @@ api.post('/adjustments/:id/apply', async (req, res) => {
       ctx: { shop: req.ctx.shop, token: req.ctx.token },
       staffId: req.ctx.staff.id,
     });
-    try {
-      result.larkNotification = await notifyAppliedAdjustmentOnce(result.adjustment);
-    } catch (error) {
-      console.error(`[lark] adjustment ${req.params.id} notification failed:`, error.message);
-      result.larkNotification = { configured: true, sent: false, error: error.message };
+    if (shouldNotifyAdjustment(req.body)) {
+      try {
+        result.larkNotification = await notifyAppliedAdjustmentOnce(result.adjustment);
+      } catch (error) {
+        console.error(`[lark] adjustment ${req.params.id} notification failed:`, error.message);
+        result.larkNotification = { configured: true, sent: false, error: error.message };
+      }
+    } else {
+      result.larkNotification = { sent: false, skippedByUser: true };
     }
     res.json(result);
   } catch (e) { res.status(409).json({ error: e.message }); }

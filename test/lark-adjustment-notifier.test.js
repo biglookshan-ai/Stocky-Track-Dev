@@ -4,6 +4,7 @@ import {
   buildAdjustmentNotificationMessages,
   larkWebhookSignature,
   postLarkMessage,
+  shouldNotifyAdjustment,
 } from '../src/lark-adjustment-notifier.js';
 
 function sampleAdjustment(lineCount = 2) {
@@ -53,11 +54,25 @@ test('builds a complete adjustment notification', () => {
   assert.match(combined, /\*\*经手员工：\*\* Chill、Shan/);
   assert.match(combined, /Product 1 \/ Variant 1/);
   assert.match(combined, /Barcode：\[50000\]\(https:\/\/admin\.shopify\.com\/store\/test\/products\/15762296209786\/variants\/57102666269050\) \| SKU：SKU-0/);
-  assert.match(combined, /Before：\*\*0\*\* · Change：<font color='green'>\*\*\+2\*\*<\/font> · After：\*\*2\*\*/);
+  assert.match(combined, /Change：<font color='green'>\*\*\+2\*\*<\/font> · Before：\*\*0\*\* · After：\*\*2\*\*/);
   assert.match(combined, /<font color='red'>\*\*-1\*\*<\/font>/);
   assert.match(combined, /\*\*调整时间：\*\* 2026\/08\/03 11:00:00/);
   assert.equal(messages.at(-1).card.elements.at(-1).actions[0].url,
     'https://admin.shopify.com/store/test/apps/inventory/adjustments/42');
+});
+
+test('indents every continuation line in a multi-line note', () => {
+  const adjustment = sampleAdjustment(1);
+  adjustment.notes = '第一行\n第二行\n第三行';
+  const combined = JSON.stringify(buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' }));
+  assert.match(combined, /\*\*备注：\*\* 第一行\\n　　　　第二行\\n　　　　第三行/);
+});
+
+test('Lark notification is enabled by default and only skips explicit false', () => {
+  assert.equal(shouldNotifyAdjustment(undefined), true);
+  assert.equal(shouldNotifyAdjustment({}), true);
+  assert.equal(shouldNotifyAdjustment({ notifyLark: true }), true);
+  assert.equal(shouldNotifyAdjustment({ notifyLark: false }), false);
 });
 
 test('keeps barcode as plain text when Shopify product identity is missing', () => {
