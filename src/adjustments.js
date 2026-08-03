@@ -27,8 +27,9 @@ async function transaction(fn) {
 
 async function participantSnapshot(client, person, fallbackStaffId = null) {
   const typedName = String(person?.name || '').trim();
-  // An explicitly typed name always wins: it must never fall back to the login
-  // account's staff row (which may be inactive and would then reject the save).
+  // A typed name always wins. fallbackStaffId (the Shopify login account) is a
+  // last resort only — the account is shared by several employees, so the real
+  // person is chosen in the form, never inferred from who is signed in.
   const staffId = person?.staffId || (typedName ? null : fallbackStaffId);
   if (staffId) {
     const staff = await client.query(
@@ -149,16 +150,31 @@ async function validateAndInsertLines(client, adjustmentId, input) {
   }
 }
 
+// Two distinct concepts, deliberately NOT one-to-one:
+//   · accounts — Shopify login accounts (rows with shopify_user_id). Detected
+//     automatically, never selectable as a person; several employees can share
+//     one account.
+//   · people   — the actual employees, managed by hand and picked per
+//     adjustment (recorded by / handled by).
 export async function listAdjustmentOptions() {
-  const [reasons, locations, staff] = await Promise.all([
+  const [reasons, locations, people, accounts] = await Promise.all([
     q(`SELECT id, name, direction, active, position
        FROM adjustment_reasons ORDER BY position, id`),
     q(`SELECT id, name FROM locations
        WHERE active AND shopify_gid IS NOT NULL ORDER BY name`),
     q(`SELECT id, shopify_user_id, employee_code, display_name, role, active
-       FROM staff ORDER BY active DESC, lower(display_name), id`),
+       FROM staff WHERE shopify_user_id IS NULL
+       ORDER BY active DESC, lower(display_name), id`),
+    q(`SELECT id, shopify_user_id, display_name, active
+       FROM staff WHERE shopify_user_id IS NOT NULL
+       ORDER BY lower(display_name), id`),
   ]);
-  return { reasons: reasons.rows, locations: locations.rows, staff: staff.rows };
+  return {
+    reasons: reasons.rows,
+    locations: locations.rows,
+    staff: people.rows,
+    accounts: accounts.rows,
+  };
 }
 
 export async function searchAdjustmentItems({ term, locationId }) {

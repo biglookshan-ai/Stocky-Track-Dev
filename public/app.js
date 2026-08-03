@@ -1239,20 +1239,25 @@ async function viewAdjustments() {
             <button id="add-reason" class="secondary small-button">添加</button></div>
         </section>
         <section>
-          <div class="section-heading"><div><h2>员工</h2><p class="muted compact">调整单里可选的人员名单。带「登录账号」标记的是 Shopify 后台账号，系统自动建立、不可删除。</p></div></div>
+          <div class="section-heading"><div><h2>员工</h2><p class="muted compact">调整单里「记录员工 / 经手员工」可选的人。与 Shopify 账号无关——多名员工可共用一个账号。</p></div></div>
           <div class="staff-list">${options.staff.map((person) => `<div class="setting-row">
             <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}" aria-label="员工姓名">
-            ${person.shopify_user_id ? '<span class="badge">登录账号</span>' : '<span></span>'}
+            <span></span>
             <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
-            ${person.shopify_user_id
-              ? '<span class="muted small">不可删除</span>'
-              : `<button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}">删除</button>`}
-          </div>`).join('') || '<p class="muted">尚无员工。</p>'}</div>
+            <button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}">删除</button>
+          </div>`).join('') || '<p class="muted">尚无员工，请在下方添加。</p>'}</div>
           <div class="setting-row new-staff">
             <input id="new-staff-name" type="text" placeholder="新员工姓名">
             <span></span><span></span>
             <button id="add-staff" class="secondary small-button">添加</button>
           </div>
+          <div class="section-heading account-section"><div><h2>Shopify 登录账号</h2><p class="muted compact">系统自动识别，仅用于记录「这张单由哪个 Shopify 账号提交」。可改成邮箱等易读名称；不参与员工选择，也不能删除。</p></div></div>
+          <div class="staff-list">${(options.accounts || []).map((acct) => `<div class="setting-row">
+            <input type="text" value="${esc(acct.display_name)}" data-staff-name="${acct.id}" aria-label="账号名称">
+            <span class="muted small">ID ${esc(acct.shopify_user_id || '')}</span>
+            <button class="secondary small-button save-staff" data-id="${acct.id}">保存</button>
+            <span></span>
+          </div>`).join('') || '<p class="muted">尚未识别到登录账号。</p>'}</div>
         </section>
       </div>
     </details>`;
@@ -1403,8 +1408,9 @@ async function viewAdjustmentForm(id = null) {
     staffId: person.staff_id || null,
     name: person.name,
   }));
-  const recordedStaffId = adjustment?.recorded_by?.staff_id
-    || options.currentStaff?.id || options.staff.find((person) => person.active)?.id || null;
+  // Recorded by is never auto-detected: one Shopify account is shared by
+  // several employees, so the actual person must be chosen by hand.
+  const recordedStaffId = adjustment?.recorded_by?.staff_id || null;
   const recordedIsCustom = Boolean(adjustment?.recorded_by && !adjustment.recorded_by.staff_id);
   app.innerHTML = `
     <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number, adjustment.display_number)}` : '新建库存调整'}</h1>
@@ -1414,12 +1420,14 @@ async function viewAdjustmentForm(id = null) {
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
         <label><span>Adjustment reason</span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
         <div class="adjustment-people">
-          <label><span>Shopify login account</span>
-            <input type="text" readonly value="${esc(options.currentStaff?.display_name || '无法识别')}" title="${esc(options.currentStaff?.shopify_user_id || '')}">
+          <label><span>Shopify 登录账号（自动识别）</span>
+            <input type="text" readonly value="${esc(options.currentStaff?.display_name || '无法识别')}" title="Shopify user id: ${esc(options.currentStaff?.shopify_user_id || '')}">
+            <span class="muted small">多名员工可能共用此账号，因此下面的经办人需手动选择。</span>
           </label>
-          <label><span>Recorded by（实际做记录的人）</span>
+          <label><span>Recorded by（实际做记录的员工）</span>
             <select id="draft-recorded">
-              ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}" ${!recordedIsCustom && Number(recordedStaffId) === person.id ? 'selected' : ''}>${esc(person.display_name)}${person.employee_code ? ` · ${esc(person.employee_code)}` : ''}</option>`).join('')}
+              <option value="" ${!recordedIsCustom && !recordedStaffId ? 'selected' : ''}>请选择员工…</option>
+              ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}" ${!recordedIsCustom && Number(recordedStaffId) === person.id ? 'selected' : ''}>${esc(person.display_name)}</option>`).join('')}
               <option value="custom" ${recordedIsCustom ? 'selected' : ''}>手动填写姓名…</option>
             </select>
             <input id="draft-recorded-custom" type="text" maxlength="120" value="${recordedIsCustom ? esc(adjustment.recorded_by.name) : ''}" placeholder="记录员工姓名" ${recordedIsCustom ? '' : 'hidden'}>
@@ -1683,6 +1691,15 @@ async function viewAdjustmentForm(id = null) {
     }
   };
   $('#save-draft').onclick = async (event) => {
+    const recordedValue = $('#draft-recorded').value;
+    if (!recordedValue) {
+      alert('请选择「Recorded by」实际做记录的员工。');
+      return;
+    }
+    if (recordedValue === 'custom' && !$('#draft-recorded-custom').value.trim()) {
+      alert('请填写记录员工姓名。');
+      return;
+    }
     event.target.disabled = true;
     try {
       const body = {
