@@ -52,6 +52,14 @@ function fakeBrowser(start) {
   return { entries, history, location };
 }
 
+function fakeStorage() {
+  const values = new Map();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+  };
+}
+
 test('legacy hash routes migrate to clean URLs and discard Shopify bootstrap params', () => {
   const browser = fakeBrowser('/?shop=test.myshopify.com&host=abc#/items/42?historyPage=3');
   const navigation = create({ historyImpl: browser.history, locationImpl: browser.location });
@@ -94,6 +102,29 @@ test('replacing detail controls keeps the list as the previous page', () => {
   assert.equal(routeFromLocation(browser.location), '/items?q=arcana&page=2');
   navigation.forward();
   assert.equal(routeFromLocation(browser.location), '/items/42?trend=committed');
+});
+
+test('forward availability survives an embedded-frame reload after going back', () => {
+  const browser = fakeBrowser('/items?q=arcana&page=2');
+  const storage = fakeStorage();
+  const firstLoad = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  firstLoad.initialize();
+  firstLoad.navigate('/items/42');
+  firstLoad.back();
+
+  const reloaded = create({
+    historyImpl: browser.history,
+    locationImpl: browser.location,
+    storageImpl: storage,
+  });
+  reloaded.initialize();
+  assert.equal(reloaded.canGoForward(), true);
+  reloaded.forward();
+  assert.equal(routeFromLocation(browser.location), '/items/42');
 });
 
 test('cleanSearch retains page state but removes embedded-app bootstrap values', () => {

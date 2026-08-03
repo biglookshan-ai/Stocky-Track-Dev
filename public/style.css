@@ -94,8 +94,8 @@ select { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
 .compact { margin: 5px 0 0; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 a.item-link { color: var(--blue); text-decoration: none; cursor: pointer; }
-a.back-link, a.reference-link { color: var(--blue); text-decoration: none; }
-a.reference-link:hover, a.back-link:hover, a.item-link:hover { text-decoration: underline; }
+a.reference-link { color: var(--blue); text-decoration: none; }
+a.reference-link:hover, a.item-link:hover { text-decoration: underline; }
 .error { color: var(--red); }
 .table-scroll { overflow-x: auto; }
 .history-table { min-width: 1050px; }

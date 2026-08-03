@@ -32,10 +32,22 @@ const routeUrl = (pathname, values = {}) => {
   const search = params.toString();
   return `${pathname}${search ? `?${search}` : ''}`;
 };
+const parentRoute = (pathname = location.pathname) => {
+  const path = pathname.replace(/\/$/, '') || '/dashboard';
+  const edit = path.match(/^\/adjustments\/(\d+)\/edit$/);
+  if (edit) return `/adjustments/${edit[1]}`;
+  if (/^\/items\/\d+$/.test(path)) return '/items';
+  if (/^\/history\/\d+$/.test(path)) return '/history';
+  if (/^\/adjustments\/\d+$/.test(path) || path === '/adjustments/new') return '/adjustments';
+  if (path === '/virtual-stock') return '/adjustments';
+  if (path === '/local-items') return '/items';
+  if (['/items', '/history', '/adjustments', '/search', '/system'].includes(path)) return '/dashboard';
+  return null;
+};
 const syncNavigationControls = () => {
   const back = $('#app-back');
   const forward = $('#app-forward');
-  if (back) back.disabled = !navigationController?.canGoBack();
+  if (back) back.disabled = !(navigationController?.canGoBack() || parentRoute());
   if (forward) forward.disabled = !navigationController?.canGoForward();
 };
 const navigateTo = (url, { replace = false, render = true } = {}) => {
@@ -43,8 +55,6 @@ const navigateTo = (url, { replace = false, render = true } = {}) => {
   syncNavigationControls();
   if (render) route();
 };
-const backLink = (fallback, label = '返回上一级') =>
-  `<a class="back-link" href="${fallback}" data-app-back>← ${label}</a>`;
 
 const sessionClient = window.InventorySessionClient.create({
   getToken: async () => {
@@ -558,8 +568,7 @@ async function viewVirtualStock(params = routeParams()) {
     const total = rows.reduce((n, r) => n + r.virtual_qty, 0);
     const current = locations.find((l) => String(l.id) === String(locationId)) || locations[0];
     app.innerHTML = `
-      <div class="page-heading"><div><h1>虚拟库存</h1><p class="muted">${esc(current ? current.name : '')} 不放实物，凡是在这个仓库有库存的都是虚拟库存：前台照常显示有货，客人下单后我们再向供应商订货或从整套里拆。厂家停产或不再供货时,在这里勾选撤销。</p></div>
-        ${backLink('/adjustments', '返回上一级')}</div>
+      <div class="page-heading"><div><h1>虚拟库存</h1><p class="muted">${esc(current ? current.name : '')} 不放实物，凡是在这个仓库有库存的都是虚拟库存：前台照常显示有货，客人下单后我们再向供应商订货或从整套里拆。厂家停产或不再供货时,在这里勾选撤销。</p></div></div>
       <div class="grid overview-grid">
         <div class="stat"><div class="n">${rows.length}</div><div class="l">有虚拟库存的商品</div></div>
         <div class="stat"><div class="n">${total}</div><div class="l">虚拟库存件数合计</div></div>
@@ -624,7 +633,7 @@ async function viewLocalItems(params = routeParams()) {
   const render = async (term = params.get('q') || '') => {
     const { rows, total } = await api(`/local-items?q=${encodeURIComponent(term)}`);
     app.innerHTML = `
-      <div class="page-heading"><div><h1>Shopify 已删除产品（${total}）</h1><p class="muted">这些产品在导入时按 Barcode 和 SKU 都在当前 Shopify 目录里找不到——基本是这几年停产/下架、已从 Shopify 删除的旧品，以及 Stocky 内部 # 组件。系统保留它们，只为不丢失其历史调整记录。</p></div>${backLink('/items', '返回上一级')}</div>
+      <div class="page-heading"><div><h1>Shopify 已删除产品（${total}）</h1><p class="muted">这些产品在导入时按 Barcode 和 SKU 都在当前 Shopify 目录里找不到——基本是这几年停产/下架、已从 Shopify 删除的旧品，以及 Stocky 内部 # 组件。系统保留它们，只为不丢失其历史调整记录。</p></div></div>
       <div class="card">
         <div class="row"><input type="search" id="local-q" value="${esc(term)}" placeholder="搜索标题 / Barcode / SKU…"><button id="local-search" class="secondary">搜索</button></div>
         <div class="table-scroll"><table>
@@ -1050,7 +1059,6 @@ async function viewItem(id, params = routeParams()) {
   const latestLevelUpdate = levels.reduce((latest, level) =>
     !latest || +new Date(level.updated_at) > +new Date(latest) ? level.updated_at : latest, null);
   app.innerHTML = `
-    <p>${backLink('/items', '返回上一级')}</p>
     <div class="card">
       <div class="card-heading"><h2>${productName(item)}</h2><div class="button-group">
         ${links.storefront ? `<a class="button secondary" href="${esc(links.storefront)}" target="_blank" rel="noopener">查看前台商品 ↗</a>` : '<span class="button secondary disabled">前台未发布</span>'}
@@ -1212,7 +1220,7 @@ async function viewSystem() {
     ? { value: '已刷新', hint: fmtDate(status.lastSnapshot.finishedAt || status.lastSnapshot.snapDate), className: 'ok' }
     : { value: '未开始', hint: '可从首页维护工具刷新', className: 'warn' };
   app.innerHTML = `
-    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div>${backLink('/dashboard', '返回上一级')}</div>
+    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div></div>
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">等待官方流水 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">官方流水回传后自动入账，通常几分钟</div></div>
@@ -1319,7 +1327,6 @@ async function viewHistoryEvent(id) {
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>修改记录详情</h1><p class="muted">查看本次操作涉及的全部商品与 Shopify 返回的库存状态变化。</p></div>
-      ${backLink('/history', '返回上一级')}
     </div>
     <div class="card event-overview">
       <div><span>Date</span><strong>${fmtDate(event.occurred_at)}</strong></div>
@@ -1632,7 +1639,7 @@ async function viewAdjustmentForm(id = null) {
   const recordedIsCustom = Boolean(adjustment?.recorded_by && !adjustment.recorded_by.staff_id);
   app.innerHTML = `
     <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number, adjustment.display_number)}` : '新建库存调整'}</h1>
-      <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div>${backLink(id ? `/adjustments/${id}` : '/adjustments', '返回上一级')}</div>
+      <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div></div>
     <div class="card adjustment-form">
       <div class="form-grid adjustment-basics">
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
@@ -1961,8 +1968,7 @@ async function viewAdjustment(id) {
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
     <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
-      <div class="button-group">${backLink('/adjustments', '返回上一级')}
-        ${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">编辑 Draft</a>` : ''}
+      <div class="button-group">${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
         ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
       </div></div>
@@ -2117,7 +2123,7 @@ document.addEventListener('click', (event) => {
   navigateTo(target);
 }, true);
 
-$('#app-back').onclick = () => navigationController.back();
+$('#app-back').onclick = () => navigationController.back(parentRoute() || '/dashboard');
 $('#app-forward').onclick = () => navigationController.forward();
 $('#global-search').onsubmit = (event) => {
   event.preventDefault();
