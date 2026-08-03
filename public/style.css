@@ -390,7 +390,7 @@ button.search-result:hover { background: #fafbfb; }
    takes the slack and the numeric columns stay compact. The draft editor uses
    the same class but has different columns, hence the extra .detail-lines. */
 .detail-lines { table-layout: fixed; }
-.detail-lines col.w-variant { width: 128px; }
+.detail-lines col.w-variant { width: 112px; }
 .detail-lines col.w-code { width: 132px; }
 .detail-lines col.w-n { width: 74px; }
 .detail-lines .col-n { text-align: left; white-space: nowrap; font-variant-numeric: tabular-nums; }
