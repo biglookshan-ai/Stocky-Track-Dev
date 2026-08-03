@@ -33,7 +33,7 @@
     historyImpl = root.history,
     locationImpl = root.location,
     storageImpl = root.sessionStorage,
-    openImpl = typeof root.open === 'function' ? root.open.bind(root) : null,
+    openImpl = typeof locationImpl?.assign === 'function' ? locationImpl.assign.bind(locationImpl) : null,
   } = {}) {
     let entries = [];
     let index = 0;
@@ -61,7 +61,7 @@
       [STATE_KEY]: { index },
     });
     const openSelf = (target) => {
-      if (openImpl) openImpl(target, '_self');
+      if (openImpl) openImpl(target);
       else historyImpl.replaceState(stateAtIndex(), '', target);
     };
     const closestEntryIndex = (route) => entries.reduce((closest, entry, candidate) => {
@@ -104,9 +104,9 @@
         entries = [...entries.slice(0, index + 1), target];
         index = entries.length - 1;
         saveStack();
-        // App Bridge's supported full-document navigation keeps the Shopify
-        // Admin URL and iframe URL together. The app-owned stack survives the
-        // new document and avoids depending on the iframe's native history.
+        // Full-document navigation keeps the route stable even when Shopify
+        // rebuilds the iframe. The app-owned stack survives the new document
+        // and avoids depending on the iframe's native history.
         openSelf(target);
       }
       return target;

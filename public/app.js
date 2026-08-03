@@ -54,8 +54,8 @@ const navigateTo = (url, { replace = false, render = true } = {}) => {
   const current = navigationController.routeFromLocation();
   const target = navigationController.navigate(url, { replace });
   syncNavigationControls();
-  // A new path uses window.open(path, '_self') so Shopify and the iframe move
-  // together. Only replacement updates stay inside the current document.
+  // A new path loads in the current iframe so Shopify cannot restore a stale
+  // internal route. Only replacement updates stay inside this document.
   if (render && (replace || target === current)) route();
 };
 
