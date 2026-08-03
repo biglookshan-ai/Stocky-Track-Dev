@@ -196,6 +196,7 @@ app.get('/healthz', async (req, res) => {
         running: historyBackfill.running, cursor: historyBackfill.cursor,
         error: historyBackfill.error || null, heartbeat: historyBackfill.heartbeat,
       },
+      stockyExtra: await getState('stocky_extra:2026-08-03-adj-3268-3278.csv'),
       stockyImport: stockyImport && {
         startedAt: stockyImport.startedAt, finishedAt: stockyImport.finishedAt,
         error: stockyImport.error || null,
@@ -1606,6 +1607,35 @@ initDb().then(() => {
       await setState('stocky_import', { error: e.message, failedAt: new Date().toISOString() });
     }
   })().catch((e) => console.error('[stocky-import]', e.message));
+  // Additional Stocky batches (e.g. adjustments made after the main export,
+  // transcribed from the Stocky UI). Each file in data/stocky-extra/ is
+  // imported once — keyed by filename — and the importer itself is idempotent,
+  // so a redeploy never duplicates anything.
+  (async () => {
+    const dir = path.join(ROOT, 'data', 'stocky-extra');
+    if (!fs.existsSync(dir)) return;
+    for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.csv')).sort()) {
+      const key = `stocky_extra:${file}`;
+      const done = await getState(key);
+      if (done?.finishedAt) continue;
+      try {
+        console.log(`[stocky-extra] importing ${file}…`);
+        const result = await runStockyImport(fs.readFileSync(path.join(dir, file), 'utf8'), { commit: true });
+        await setState(key, {
+          finishedAt: new Date().toISOString(),
+          adjustmentsCreated: result.adjustmentsCreated,
+          eventsInserted: result.eventsInserted,
+          linesInserted: result.linesInserted,
+          itemsCreated: result.itemsCreated,
+          coveredMapping: result.report?.coveredMapping || null,
+        });
+        console.log(`[stocky-extra] ${file}: ${result.adjustmentsCreated} adjustments, ${result.linesInserted} ledger lines`);
+      } catch (e) {
+        console.error(`[stocky-extra] ${file} failed:`, e.message);
+        await setState(key, { error: e.message, failedAt: new Date().toISOString() });
+      }
+    }
+  })().catch((e) => console.error('[stocky-extra]', e.message));
   resumeInterruptedHistory().catch(async (e) => {
     console.error('[history] resume failed:', e.message);
     const state = await getState('inventory_history_backfill').catch(() => ({}));
