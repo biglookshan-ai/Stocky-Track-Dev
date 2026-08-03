@@ -337,7 +337,7 @@ details.card[open] summary { margin-bottom: 12px; }
 .adjustments-table .col-no .badge { display: inline-block; margin-left: 4px; font-size: 10px; padding: 0 4px; }
 .adjustments-table .col-note .note-main { line-height: 1.5; }
 .adjustments-table .col-loc { font-size: 12px; color: var(--sub); }
-.adjustments-table .col-qty { white-space: nowrap; padding-left: 4px; padding-right: 4px; }
+.adjustments-table .col-qty { white-space: nowrap; text-align: left; font-variant-numeric: tabular-nums; }
 .adjustments-table .col-date { font-size: 12px; color: var(--sub); white-space: nowrap; }
 .adjustments-table .col-status .status-pill { font-size: 11px; padding: 1px 7px; }
 .xsmall { font-size: 11px; line-height: 1.4; margin-top: 2px; }

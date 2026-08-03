@@ -1305,13 +1305,13 @@ async function viewAdjustments() {
         <col class="w-no"><col><col class="w-person"><col class="w-loc">
         <col class="w-qty"><col class="w-qty"><col class="w-date"><col class="w-status">
       </colgroup>
-      <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th></tr></thead>
+      <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th>商品</th><th>合计</th><th>日期</th><th>状态</th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
         <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a></td>
         <td class="col-note">${row.notes ? `<div class="note-main">${esc(row.notes)}</div>` : '<div class="note-main muted">（无备注）</div>'}<div class="muted xsmall">${esc(row.reason || '—')}</div>${row.apply_error ? `<div class="error xsmall">${esc(row.apply_error)}</div>` : ''}</td>
         <td class="col-person">${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted xsmall">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
         <td class="col-loc">${esc(row.locations || '—')}</td>
-        <td class="num col-qty">${row.line_count}</td><td class="num col-qty"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
+        <td class="col-qty">${row.line_count}</td><td class="col-qty"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
         <td class="col-date">${fmtDateCompact(row.applied_at || row.created_at)}</td>
         <td class="col-status">${adjustmentStatus(row.status)}</td>
       </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
