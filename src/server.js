@@ -147,6 +147,11 @@ app.post('/webhooks', receiveWebhook);
 // Shopify's formal audit trail) are internal bookkeeping only. Every
 // user-facing surface shows formal events exclusively: a record either has its
 // definite actor/reason or it is not shown yet.
+// One source of truth for how a Shopify account/person is labelled: whatever
+// the user set in 员工/Shopify 登录账号 settings wins over the name ShopifyQL
+// returns, so renaming an account to its email shows up everywhere.
+const STAFF_LABEL = `COALESCE((SELECT s.display_name FROM staff s
+  WHERE s.shopify_user_id = e.staff_shopify_id LIMIT 1), e.staff_name)`;
 const formalEvent = (alias) =>
   `NOT (${alias}.source_type='unknown' AND ${alias}.shopify_group_gid LIKE 'webhook:%')`;
 const AWAITING_FORMAL_SQL = `
@@ -309,7 +314,7 @@ api.get('/recent-items', async (req, res) => {
     const pageSize = Math.min(20, Math.max(5, Number(req.query.limit || 10)));
     const result = await q(`WITH event_items AS (
          SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
-                e.staff_name, e.app_name, e.source_type,
+                ${STAFF_LABEL} AS staff_name, e.app_name, e.source_type,
                 sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
                 sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
                 string_agg(DISTINCT loc.name, ', ' ORDER BY loc.name) AS locations
@@ -783,7 +788,7 @@ api.get('/items', async (req, res) => {
          ),
          event_items AS (
            SELECT lg.item_id, e.id AS event_id, e.occurred_at, e.activity,
-                  e.staff_name, e.app_name, e.source_type,
+                  ${STAFF_LABEL} AS staff_name, e.app_name, e.source_type,
                   sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
                   sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
                   max(lg.qty_after) FILTER (WHERE lg.state='available')::int AS available_after
@@ -866,7 +871,7 @@ api.get('/items/:id', async (req, res) => {
                 cl.updated_at
          FROM current_levels cl JOIN locations l ON l.id = cl.location_id
          WHERE cl.item_id = $1 ORDER BY l.name`, [id]),
-      q(`SELECT e.occurred_at, e.activity, e.staff_name, e.app_name, e.source_type,
+      q(`SELECT e.occurred_at, e.activity, ${STAFF_LABEL} AS staff_name, e.app_name, e.source_type,
                 sum(lg.delta) FILTER (WHERE lg.state='available')::int AS available_delta,
                 sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta
          FROM inventory_events e
@@ -1023,7 +1028,7 @@ api.get('/items/:id/sales', async (req, res) => {
     if (from) {
       const movements = await q(`
         SELECT e.id AS event_id, e.occurred_at, e.activity, e.reason,
-               e.source_type, e.staff_name, e.app_name,
+               e.source_type, ${STAFF_LABEL} AS staff_name, e.app_name,
                e.reference_document_uri, e.reference_document_type,
                e.reference_document_id, loc.id AS location_id, loc.name AS location,
                sum(lg.delta) FILTER (WHERE lg.state='on_hand')::int AS on_hand_delta,
@@ -1167,7 +1172,7 @@ api.get('/items/:id/history', async (req, res) => {
              e.occurred_at, c.reason_code, c.source_type, c.actor_name, c.app_name,
              c.reference_document_uri, loc.name AS location,
              e.occurred_at AS event_occurred_at, e.activity, e.reason AS event_reason,
-             e.app_name AS event_app_name, e.staff_name,
+             e.app_name AS event_app_name, ${STAFF_LABEL} AS staff_name,
              e.reference_document_uri AS event_reference_uri,
              e.reference_document_type AS event_reference_type,
              e.reference_document_id AS event_reference_id,
@@ -1208,7 +1213,7 @@ function historyFilters(query, params) {
     const p = add(`%${term}%`);
     filters.push(`(
       e.activity ILIKE ${p} OR e.reason ILIKE ${p}
-      OR e.staff_name ILIKE ${p} OR e.app_name ILIKE ${p}
+      OR ${STAFF_LABEL} ILIKE ${p} OR e.app_name ILIKE ${p}
       OR e.reference_document_uri ILIKE ${p}
       OR e.reference_document_type ILIKE ${p}
       OR e.reference_document_id ILIKE ${p}
@@ -1250,7 +1255,7 @@ function historyFilters(query, params) {
   if (person) {
     const p = add(`%${person}%`);
     filters.push(`(
-      e.staff_name ILIKE ${p} OR e.app_name ILIKE ${p}
+      ${STAFF_LABEL} ILIKE ${p} OR e.app_name ILIKE ${p}
       OR EXISTS (
         SELECT 1 FROM adjustments person_a
         JOIN adjustment_participants person_ap ON person_ap.adjustment_id=person_a.id
@@ -1288,7 +1293,7 @@ async function historyRows(query, { defaultLimit = 50, maxLimit = 100 } = {}) {
   const where = historyFilters(query, params);
   const [count, rows] = await Promise.all([
     q(`SELECT count(*)::int total FROM inventory_events e WHERE ${where}`, params),
-    q(`SELECT e.id, e.occurred_at, e.activity, e.reason, e.staff_name,
+    q(`SELECT e.id, e.occurred_at, e.activity, e.reason, ${STAFF_LABEL} AS staff_name,
               e.app_name, e.reference_document_uri, e.reference_document_type,
               e.reference_document_id, e.source_type,
               count(DISTINCT lg.item_id)::int product_count,
@@ -1386,7 +1391,8 @@ api.get('/history/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const [event, lines] = await Promise.all([
-      q(`SELECT e.*, adj.id AS adjustment_id, adj.number AS adjustment_number,
+      q(`SELECT e.*, ${STAFF_LABEL} AS staff_name,
+                adj.id AS adjustment_id, adj.number AS adjustment_number,
                 adj.display_number AS adjustment_display_number
          FROM inventory_events e
          LEFT JOIN LATERAL (SELECT id, number, display_number FROM adjustments a
