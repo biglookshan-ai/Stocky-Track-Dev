@@ -69,7 +69,7 @@ test('legacy hash routes migrate to clean URLs and discard Shopify bootstrap par
   assert.equal(browser.location.hash, '');
 });
 
-test('navigation records support back and forward in the actual visit order', () => {
+test('navigation records support repeated back in the actual visit order', () => {
   const browser = fakeBrowser('/items?q=arcana&page=2');
   const navigation = create({ historyImpl: browser.history, locationImpl: browser.location });
   navigation.initialize();
@@ -79,8 +79,6 @@ test('navigation records support back and forward in the actual visit order', ()
   assert.equal(routeFromLocation(browser.location), '/items/42');
   navigation.back();
   assert.equal(routeFromLocation(browser.location), '/items?q=arcana&page=2');
-  navigation.forward();
-  assert.equal(routeFromLocation(browser.location), '/items/42');
 });
 
 test('direct detail-page back uses the safe parent fallback', () => {
@@ -91,9 +89,6 @@ test('direct detail-page back uses the safe parent fallback', () => {
   navigation.back('/items');
   assert.equal(routeFromLocation(browser.location), '/items');
   assert.equal(browser.entries.length, 1);
-  assert.equal(navigation.canGoForward(), true);
-  navigation.forward();
-  assert.equal(routeFromLocation(browser.location), '/items/42');
 });
 
 test('replacing detail controls keeps the list as the previous page', () => {
@@ -104,11 +99,9 @@ test('replacing detail controls keeps the list as the previous page', () => {
   navigation.navigate('/items/42?trend=committed', { replace: true });
   navigation.back();
   assert.equal(routeFromLocation(browser.location), '/items?q=arcana&page=2');
-  navigation.forward();
-  assert.equal(routeFromLocation(browser.location), '/items/42?trend=committed');
 });
 
-test('full navigation stack survives Shopify replacing the embedded frame', () => {
+test('back stack survives Shopify replacing the embedded frame', () => {
   const browser = fakeBrowser('/items?q=arcana&page=2');
   const storage = fakeStorage();
   const firstLoad = create({
@@ -140,7 +133,6 @@ test('full navigation stack survives Shopify replacing the embedded frame', () =
   historyFrame.initialize();
   historyFrame.back();
   assert.equal(routeFromLocation(browser.location), '/items/42');
-  assert.equal(historyFrame.canGoForward(), true);
 
   browser.history.state = null;
   const reloadedDetailFrame = create({
@@ -149,32 +141,8 @@ test('full navigation stack survives Shopify replacing the embedded frame', () =
     storageImpl: storage,
   });
   reloadedDetailFrame.initialize();
-  assert.equal(reloadedDetailFrame.canGoForward(), true);
   reloadedDetailFrame.back();
   assert.equal(routeFromLocation(browser.location), '/items?q=arcana&page=2');
-
-  browser.history.state = null;
-  const listFrame = create({
-    historyImpl: browser.history,
-    locationImpl: browser.location,
-    storageImpl: storage,
-  });
-  listFrame.initialize();
-  assert.equal(listFrame.canGoForward(), true);
-  listFrame.forward();
-  assert.equal(routeFromLocation(browser.location), '/items/42');
-
-  browser.history.state = null;
-  const forwardDetailFrame = create({
-    historyImpl: browser.history,
-    locationImpl: browser.location,
-    storageImpl: storage,
-  });
-  forwardDetailFrame.initialize();
-  assert.equal(forwardDetailFrame.canGoBack(), true);
-  assert.equal(forwardDetailFrame.canGoForward(), true);
-  forwardDetailFrame.forward();
-  assert.equal(routeFromLocation(browser.location), '/history/99');
 });
 
 test('cleanSearch retains page state but removes embedded-app bootstrap values', () => {

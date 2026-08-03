@@ -46,17 +46,12 @@ const parentRoute = (pathname = location.pathname) => {
 };
 const syncNavigationControls = () => {
   const back = $('#app-back');
-  const forward = $('#app-forward');
   if (back) back.disabled = !(navigationController?.canGoBack() || parentRoute());
-  if (forward) forward.disabled = !navigationController?.canGoForward();
 };
 const navigateTo = (url, { replace = false, render = true } = {}) => {
-  const current = navigationController.routeFromLocation();
-  const target = navigationController.navigate(url, { replace });
+  navigationController.navigate(url, { replace });
   syncNavigationControls();
-  // A new path loads in the current iframe so Shopify cannot restore a stale
-  // internal route. Only replacement updates stay inside this document.
-  if (render && (replace || target === current)) route();
+  if (render) route();
 };
 
 const sessionClient = window.InventorySessionClient.create({
@@ -2120,6 +2115,7 @@ document.addEventListener('click', (event) => {
   if (anchor.hasAttribute('data-app-back')) {
     navigationController.back(target);
     syncNavigationControls();
+    route();
     return;
   }
   navigateTo(target);
@@ -2128,10 +2124,7 @@ document.addEventListener('click', (event) => {
 $('#app-back').onclick = () => {
   navigationController.back(parentRoute() || '/dashboard');
   syncNavigationControls();
-};
-$('#app-forward').onclick = () => {
-  navigationController.forward();
-  syncNavigationControls();
+  route();
 };
 $('#global-search').onsubmit = (event) => {
   event.preventDefault();
