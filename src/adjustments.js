@@ -177,11 +177,13 @@ export async function listAdjustmentOptions() {
   };
 }
 
-export async function searchAdjustmentItems({ term, locationId }) {
+export async function searchAdjustmentItems({ term, locationId, page = 1, limit = 50 }) {
   const location = Number(locationId);
   if (!Number.isInteger(location) || location <= 0) throw new Error('请选择仓位');
   const search = String(term || '').trim().slice(0, 120);
-  if (!search) return [];
+  const currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number.parseInt(limit, 10) || 50));
+  if (!search) return { rows: [], total: 0, page: currentPage, pageSize, totalPages: 0 };
   // Shopify-style tokenized search: split on whitespace and require EVERY word
   // to appear somewhere in the combined searchable text (title + variant + sku +
   // barcode + vendor), in any order. So "dzofilm arles 100mm" matches
@@ -193,9 +195,12 @@ export async function searchAdjustmentItems({ term, locationId }) {
     return `(concat_ws(' ', i.product_title, i.variant_title, i.sku, i.barcode, i.vendor) ILIKE $${params.length})`;
   });
   const where = tokenClauses.length ? `AND ${tokenClauses.join(' AND ')}` : '';
+  params.push(pageSize, (currentPage - 1) * pageSize);
+  const limitParam = params.length - 1;
+  const offsetParam = params.length;
   const result = await q(
     `SELECT i.id, i.product_title, i.variant_title, i.barcode, i.sku, i.vendor,
-            i.shopify_inventory_item_gid, cl.available
+            i.shopify_inventory_item_gid, cl.available, count(*) OVER()::int AS total
      FROM items i
      JOIN current_levels cl ON cl.item_id=i.id AND cl.location_id=$1
      WHERE i.status <> 'deleted' AND i.tracked AND i.shopify_inventory_item_gid IS NOT NULL
@@ -204,10 +209,17 @@ export async function searchAdjustmentItems({ term, locationId }) {
      ORDER BY
        CASE WHEN i.barcode=$2 THEN 0 WHEN i.sku=$2 THEN 1 ELSE 2 END,
        i.product_title, i.variant_title
-     LIMIT 50`,
+     LIMIT $${limitParam} OFFSET $${offsetParam}`,
     params,
   );
-  return result.rows;
+  const total = Number(result.rows[0]?.total || 0);
+  return {
+    rows: result.rows.map(({ total: _total, ...row }) => row),
+    total,
+    page: currentPage,
+    pageSize,
+    totalPages: Math.ceil(total / pageSize),
+  };
 }
 
 export async function saveAdjustmentDraft({ id = null, input: rawInput, staffId }) {

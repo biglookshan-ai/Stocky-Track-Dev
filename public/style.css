@@ -514,6 +514,9 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .modal-toolbar label { display: flex; align-items: center; gap: 6px; }
 .modal-body { flex: 1 1 auto; overflow-y: auto; }
 .picker-empty { padding: 42px 20px; color: var(--sub); text-align: center; }
+.modal-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 9px 16px; border-top: 1px solid var(--border); background: #fafbfb; }
+.modal-pagination[hidden] { display: none; }
+.modal-pagination button { padding: 6px 12px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .picker-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .picker-row:last-child { border-bottom: 0; }

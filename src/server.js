@@ -546,12 +546,12 @@ api.get('/adjustment-options', async (req, res) => {
 
 api.get('/adjustment-items', async (req, res) => {
   try {
-    res.json({
-      rows: await searchAdjustmentItems({
-        term: req.query.q,
-        locationId: req.query.locationId,
-      }),
-    });
+    res.json(await searchAdjustmentItems({
+      term: req.query.q,
+      locationId: req.query.locationId,
+      page: req.query.page,
+      limit: req.query.limit,
+    }));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

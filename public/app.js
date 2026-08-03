@@ -1810,10 +1810,15 @@ async function viewAdjustmentForm(id = null) {
           <button id="picker-find" type="button">搜索</button>
         </div>
         <div class="modal-toolbar" id="picker-toolbar" hidden>
-          <label><input type="checkbox" id="picker-all"> 全选</label>
+          <label><input type="checkbox" id="picker-all"> 本页全选</label>
           <span class="muted small" id="picker-count"></span>
         </div>
         <div class="modal-body" id="picker-results"><div class="picker-empty">输入搜索内容，然后点击“搜索”。</div></div>
+        <div class="modal-pagination" id="picker-pagination" hidden>
+          <button class="secondary" id="picker-prev" type="button">上一页</button>
+          <span class="muted small" id="picker-page-info"></span>
+          <button class="secondary" id="picker-next" type="button">下一页</button>
+        </div>
         <div class="modal-foot">
           <button class="secondary" id="picker-cancel">取消</button>
           <button id="picker-add" disabled>加入所选</button>
@@ -1822,43 +1827,66 @@ async function viewAdjustmentForm(id = null) {
     document.body.appendChild(dialog);
     let resultRows = [];
     let checks = [];
+    let searchTerm = '';
+    let currentPage = 1;
+    let totalPages = 0;
+    let totalResults = 0;
+    const selectedRows = new Map();
     const onKey = (event) => { if (event.key === 'Escape') close(); };
     const close = () => {
       document.removeEventListener('keydown', onKey);
       dialog.remove();
     };
     const refresh = () => {
-      const n = checks.filter((c) => c.checked).length;
+      const n = selectedRows.size;
+      const checkedOnPage = checks.filter((checkbox) => checkbox.checked).length;
       dialog.querySelector('#picker-add').disabled = !n;
       dialog.querySelector('#picker-add').textContent = n ? `加入所选（${n}）` : '加入所选';
-      dialog.querySelector('#picker-count').textContent = `已选 ${n} / 可选 ${checks.length}`;
-      dialog.querySelector('#picker-all').checked = Boolean(checks.length) && n === checks.length;
+      dialog.querySelector('#picker-count').textContent = `已选 ${n} / 共 ${totalResults} 个结果`;
+      dialog.querySelector('#picker-all').checked = Boolean(checks.length) && checkedOnPage === checks.length;
     };
-    const showRows = (rows, term) => {
-      resultRows = rows;
-      dialog.querySelector('#picker-summary').textContent = `「${term}」共 ${rows.length} 个变体`;
-      dialog.querySelector('#picker-toolbar').hidden = !rows.length;
-      dialog.querySelector('#picker-results').innerHTML = rows.length ? rows.map((row) => `
+    const showRows = (result, term) => {
+      resultRows = result.rows;
+      currentPage = Number(result.page || 1);
+      totalPages = Number(result.totalPages || 0);
+      totalResults = Number(result.total || result.rows.length);
+      dialog.querySelector('#picker-summary').textContent = `「${term}」共 ${totalResults} 个变体`;
+      dialog.querySelector('#picker-toolbar').hidden = !result.rows.length;
+      dialog.querySelector('#picker-pagination').hidden = totalPages <= 1;
+      dialog.querySelector('#picker-page-info').textContent = `第 ${currentPage} / ${totalPages} 页`;
+      dialog.querySelector('#picker-prev').disabled = currentPage <= 1;
+      dialog.querySelector('#picker-next').disabled = currentPage >= totalPages;
+      dialog.querySelector('#picker-results').innerHTML = result.rows.length ? result.rows.map((row) => `
         <label class="picker-row ${inDraft(row.id) ? 'already' : ''}">
-          <input type="checkbox" class="picker-check" value="${row.id}" ${inDraft(row.id) ? 'checked disabled' : ''}>
+          <input type="checkbox" class="picker-check" value="${row.id}" ${inDraft(row.id) || selectedRows.has(row.id) ? 'checked' : ''} ${inDraft(row.id) ? 'disabled' : ''}>
           <span class="picker-main"><strong>${esc(row.product_title)}</strong>${variantLabel(row) ? ` <span class="variant-tag">${variantLabel(row)}</span>` : ''}<span class="picker-codes">${esc(row.barcode || '—')}${row.sku ? ` · ${esc(row.sku)}` : ''}${row.vendor ? ` · ${esc(row.vendor)}` : ''}</span></span>
           <span class="picker-avail">${inDraft(row.id) ? '已加入' : `Available <strong>${row.available}</strong>`}</span>
         </label>`).join('') : '<div class="picker-empty">该仓位没有匹配且可调整的商品。</div>';
       checks = [...dialog.querySelectorAll('.picker-check:not([disabled])')];
-      checks.forEach((checkbox) => { checkbox.onchange = refresh; });
+      checks.forEach((checkbox) => {
+        checkbox.onchange = () => {
+          const row = resultRows.find((entry) => entry.id === Number(checkbox.value));
+          if (checkbox.checked) selectedRows.set(row.id, row);
+          else selectedRows.delete(row.id);
+          refresh();
+        };
+      });
       refresh();
     };
-    const findItems = async () => {
+    const findItems = async (page = 1, resetSelection = false) => {
       const input = dialog.querySelector('#picker-search');
       const button = dialog.querySelector('#picker-find');
       const term = input.value.trim();
       if (!term) { input.focus(); return; }
+      if (resetSelection || term !== searchTerm) selectedRows.clear();
+      searchTerm = term;
       button.disabled = true;
       dialog.querySelector('#picker-toolbar').hidden = true;
+      dialog.querySelector('#picker-pagination').hidden = true;
       dialog.querySelector('#picker-results').innerHTML = '<div class="picker-empty">搜索中…</div>';
       try {
-        const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
-        showRows(result.rows, term);
+        const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}&page=${page}&limit=50`);
+        showRows(result, term);
       } catch (error) {
         resultRows = [];
         checks = [];
@@ -1868,20 +1896,26 @@ async function viewAdjustmentForm(id = null) {
       } finally { button.disabled = false; }
     };
     dialog.querySelector('#picker-all').onchange = (e) => {
-      checks.forEach((c) => { c.checked = e.target.checked; });
+      checks.forEach((checkbox) => {
+        checkbox.checked = e.target.checked;
+        const row = resultRows.find((entry) => entry.id === Number(checkbox.value));
+        if (checkbox.checked) selectedRows.set(row.id, row);
+        else selectedRows.delete(row.id);
+      });
       refresh();
     };
     dialog.querySelector('#picker-close').onclick = close;
     dialog.querySelector('#picker-cancel').onclick = close;
     dialog.onclick = (e) => { if (e.target === dialog) close(); };
     document.addEventListener('keydown', onKey);
-    dialog.querySelector('#picker-find').onclick = findItems;
+    dialog.querySelector('#picker-find').onclick = () => findItems(1, true);
+    dialog.querySelector('#picker-prev').onclick = () => findItems(currentPage - 1);
+    dialog.querySelector('#picker-next').onclick = () => findItems(currentPage + 1);
     dialog.querySelector('#picker-search').onkeydown = (event) => {
-      if (event.key === 'Enter') { event.preventDefault(); findItems(); }
+      if (event.key === 'Enter') { event.preventDefault(); findItems(1, true); }
     };
     dialog.querySelector('#picker-add').onclick = () => {
-      const ids = checks.filter((c) => c.checked).map((c) => Number(c.value));
-      addRows(resultRows.filter((r) => ids.includes(r.id)));
+      addRows([...selectedRows.values()]);
       close();
     };
     refresh();
