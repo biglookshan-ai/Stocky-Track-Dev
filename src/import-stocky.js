@@ -24,7 +24,9 @@ import { q, pool } from './db.js';
 export function mergeAdjustmentLines(lines) {
   const merged = new Map();
   for (const l of lines) {
-    const key = `${l.barcode}|${l.location.toLowerCase()}`;
+    // Key on barcode when present, otherwise SKU — an empty barcode would
+    // otherwise merge different products at the same location into one line.
+    const key = `${l.barcode || `sku:${(l.sku || '').toLowerCase()}`}|${l.location.toLowerCase()}`;
     const cur = merged.get(key);
     if (cur) cur.delta += l.delta;
     else merged.set(key, { ...l });
@@ -148,7 +150,10 @@ export function planImport(rows, { coverageStart = null } = {}) {
     const lines = [];
     for (const r of adjusted) {
       const barcode = (r.Barcode || '').trim();
-      if (!barcode) { issues.missingBarcodeRows++; continue; }
+      // A row is usable when it carries either identifier — resolveItemId
+      // falls back to a unique SKU. (Rows transcribed from Stocky screenshots
+      // have the SKU but not the barcode.)
+      if (!barcode && !(r.SKU || '').trim()) { issues.missingBarcodeRows++; continue; }
       const emp = canonicalEmployee(r.Employee);
       if (emp) {
         const key = emp.toLowerCase();
@@ -349,9 +354,11 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
   const unmatchedBarcodes = new Map(); // barcode → best sample line info (→ local item)
   for (const e of allEvents) {
     for (const l of e.lines) {
-      if (resolveItemId(lookups, l) || !l.barcode) continue;
-      const cur = unmatchedBarcodes.get(l.barcode);
-      if (!cur || sampleRank(l) > sampleRank(cur)) unmatchedBarcodes.set(l.barcode, l);
+      if (resolveItemId(lookups, l)) continue;
+      const key = l.barcode || `sku:${l.sku}`;
+      if (!key || key === 'sku:') continue;
+      const cur = unmatchedBarcodes.get(key);
+      if (!cur || sampleRank(l) > sampleRank(cur)) unmatchedBarcodes.set(key, l);
     }
   }
   const newLocations = [...new Set(allEvents.flatMap((e) => e.lines.map((l) => l.location)))]
@@ -434,17 +441,19 @@ export async function runStockyImport(csvText, { commit = false } = {}) {
          VALUES (NULL, $1, 'member', true) RETURNING id`, [name]);
       lookups.staffByName.set(name.toLowerCase(), r.rows[0].id);
     }
-    for (const [barcode, sample] of unmatchedBarcodes) {
-      // Best available name: product title → variant → SKU → "(Stocky) barcode".
+    for (const [key, sample] of unmatchedBarcodes) {
+      const barcode = sample.barcode || '';
+      // Best available name: product title → variant → SKU → "(Stocky) key".
       // When falling back to variant/SKU as the title, don't repeat it as variant.
       const hasProduct = Boolean(sample.product);
-      const title = sample.product || sample.variant || sample.sku || `(Stocky) ${barcode}`;
+      const title = sample.product || sample.variant || sample.sku || `(Stocky) ${key}`;
       const variant = hasProduct ? (sample.variant || '') : '';
       const r = await client.query(
         `INSERT INTO items (source, product_title, variant_title, sku, barcode, tracked, status)
          VALUES ('local', $1, $2, $3, $4, true, 'active') RETURNING id`,
         [title, variant, sample.sku || '', barcode]);
-      lookups.itemByBarcode.set(barcode, r.rows[0].id);
+      if (barcode) lookups.itemByBarcode.set(barcode, r.rows[0].id);
+      if (sample.sku) lookups.itemBySku.set(sample.sku.trim().toLowerCase(), r.rows[0].id);
       itemsCreated++;
     }
     for (const e of plan.events) {

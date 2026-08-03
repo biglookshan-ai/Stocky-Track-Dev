@@ -156,3 +156,13 @@ test('resolveItemId: blank sku never matches', () => {
   const lk = { itemByBarcode: new Map(), itemBySku: new Map([['', 5]]) };
   assert.equal(resolveItemId(lk, { barcode: '', sku: '' }), null);
 });
+
+test('mergeAdjustmentLines: sku-only rows do not collide on empty barcode', () => {
+  const merged = mergeAdjustmentLines([
+    { barcode: '', sku: 'MB', location: 'CN', delta: -1 },
+    { barcode: '', sku: 'PLM', location: 'CN', delta: -1 },
+    { barcode: '', sku: 'MB', location: 'CN', delta: -2 },
+  ]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((l) => l.sku === 'MB').delta, -3);
+});
