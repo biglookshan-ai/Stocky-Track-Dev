@@ -18,4 +18,4 @@ WHERE e.id = lg.event_id AND lg.source_type = 'transfer'
 -- resolved again with the corrected logic.
 DELETE FROM reference_documents
 WHERE canonical_uri ILIKE 'gid://shopify/InventoryTransfer/%'
-  AND (fetch_error IS NOT NULL OR name IS NULL);
+  AND (fetch_error IS NOT NULL OR display_name IS NULL);
