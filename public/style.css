@@ -541,3 +541,12 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .inventory-matrix .total-row { background: #fafbfb; }
 .inventory-matrix .total-row th, .inventory-matrix .total-row td { border-bottom: 2px solid var(--border); }
 .inventory-matrix tbody tr:hover td { background: transparent; }
+
+/* Virtual stock register */
+.virtual-stock-table { min-width: 900px; table-layout: fixed; }
+.virtual-stock-table th, .virtual-stock-table td { padding: 10px; vertical-align: top; }
+.virtual-stock-table col.w-check { width: 34px; }
+.virtual-stock-table col.w-loc { width: 116px; }
+.virtual-stock-table col.w-n { width: 82px; }
+.virtual-stock-table col.w-date { width: 92px; }
+.virtual-stock-table .row-warn td { background: #fffaf7; }

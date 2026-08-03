@@ -724,3 +724,83 @@ export async function adjustmentsCsv(filters = {}) {
     ].map(csvCell).join(',')),
   ].join('\r\n');
 }
+
+// ---- Virtual stock register -------------------------------------------------
+// "Virtual stock" is inventory the shop can supply but does not physically hold
+// as that SKU (B-Stock listings, units taken out of a larger kit, supplier
+// stock). It is created with the 'Virtual stock adjustment' reason and must be
+// revoked when the real unit sells or the item is discontinued. Until now the
+// only trace was the note text, so 500+ units were left outstanding with no way
+// to review them. The register is derived from the ledger: the net of every
+// virtual-stock adjustment per item+location.
+export const VIRTUAL_STOCK_REASON = 'Virtual stock adjustment';
+
+export async function listVirtualStock({ term = '', includeSettled = false } = {}) {
+  const params = [VIRTUAL_STOCK_REASON];
+  let search = '';
+  const clean = String(term || '').trim().slice(0, 80);
+  if (clean) {
+    params.push(`%${clean}%`);
+    search = `AND (i.product_title ILIKE $${params.length} OR i.variant_title ILIKE $${params.length}
+      OR i.sku ILIKE $${params.length} OR i.barcode ILIKE $${params.length})`;
+  }
+  const having = includeSettled ? '' : 'HAVING sum(lg.delta) <> 0';
+  const result = await q(`
+    SELECT i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode, i.source,
+           l.id AS location_id, l.name AS location,
+           sum(lg.delta)::int AS virtual_qty,
+           count(*)::int AS entry_count,
+           max(lg.occurred_at) AS last_at,
+           (array_agg(lg.notes ORDER BY lg.occurred_at DESC, lg.id DESC)
+              FILTER (WHERE lg.notes IS NOT NULL))[1] AS last_note,
+           cl.available
+    FROM inventory_ledger lg
+    JOIN items i ON i.id = lg.item_id
+    JOIN locations l ON l.id = lg.location_id
+    LEFT JOIN current_levels cl ON cl.item_id = lg.item_id AND cl.location_id = lg.location_id
+    WHERE lg.reason_code = $1 AND i.status <> 'deleted' ${search}
+    GROUP BY i.id, l.id, cl.available
+    ${having}
+    ORDER BY sum(lg.delta) DESC, i.product_title
+    LIMIT 500`, params);
+  return result.rows.map((row) => ({
+    ...row,
+    // The virtual units are gone from stock but never formally revoked — the
+    // listing may now be sellable on nothing at all.
+    consumed: row.available !== null && Number(row.available) < Number(row.virtual_qty),
+  }));
+}
+
+// Build a draft that reverses the outstanding virtual quantity. A draft (not a
+// direct write) keeps the existing review-then-apply safeguard.
+export async function buildVirtualStockRevokeDraft({ entries, staffId, recordedBy, handledBy = [] }) {
+  if (!Array.isArray(entries) || !entries.length) throw new Error('请选择要撤销的虚拟库存');
+  const reason = await q('SELECT id FROM adjustment_reasons WHERE name = $1', [VIRTUAL_STOCK_REASON]);
+  if (!reason.rowCount) throw new Error(`找不到「${VIRTUAL_STOCK_REASON}」原因，请先在设置中添加`);
+  const all = await listVirtualStock({});
+  const byKey = new Map(all.map((row) => [`${row.item_id}:${row.location_id}`, row]));
+  const byLocation = new Map();
+  for (const entry of entries) {
+    const row = byKey.get(`${Number(entry.itemId)}:${Number(entry.locationId)}`);
+    if (!row || !row.virtual_qty) continue;
+    if (!byLocation.has(row.location_id)) byLocation.set(row.location_id, []);
+    byLocation.get(row.location_id).push(row);
+  }
+  if (!byLocation.size) throw new Error('所选项目没有待撤销的虚拟库存');
+  const created = [];
+  for (const [locationId, rows] of byLocation) {
+    const id = await saveAdjustmentDraft({
+      input: {
+        locationId,
+        reasonId: reason.rows[0].id,
+        notes: `撤销虚拟库存：${rows.map((r) => `${r.sku || r.barcode || r.product_title} ${-r.virtual_qty}`).join('、')}`,
+        lines: rows.map((r) => ({ itemId: r.item_id, delta: -r.virtual_qty })),
+        recordedBy,
+        handledBy,
+      },
+      staffId,
+    });
+    created.push({ id, locationId, lines: rows.length });
+  }
+  return created;
+}

@@ -30,6 +30,8 @@ import {
   createAdjustmentReason,
   createStaff,
   getAdjustment,
+  listVirtualStock,
+  buildVirtualStockRevokeDraft,
   listAdjustmentOptions,
   listAdjustments,
   saveAdjustmentDraft,
@@ -415,6 +417,28 @@ api.get('/setup/webhooks', async (req, res) => {
   try {
     res.json({ subscriptions: await listSubscriptions({ shop: req.ctx.shop, token: req.ctx.token }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Virtual stock register: what the shop still has listed as available without
+// holding it physically, derived from the ledger's virtual-stock adjustments.
+api.get('/virtual-stock', async (req, res) => {
+  try {
+    res.json({ rows: await listVirtualStock({ term: req.query.q }) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Creates review-first drafts that zero the selected virtual stock (one draft
+// per location); the user still confirms before anything is written to Shopify.
+api.post('/virtual-stock/revoke', async (req, res) => {
+  try {
+    const created = await buildVirtualStockRevokeDraft({
+      entries: req.body?.entries,
+      staffId: req.ctx.staff?.id || null,
+      recordedBy: req.body?.recordedBy,
+      handledBy: req.body?.handledBy || [],
+    });
+    res.status(201).json({ created });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // Stocky legacy CSV import: dry-run returns the mapping report; commit writes.

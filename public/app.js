@@ -519,6 +519,72 @@ async function viewDashboard() {
   });
 }
 
+
+async function viewVirtualStock() {
+  app.innerHTML = '<div class="card">加载中…</div>';
+  const options = await api('/adjustment-options');
+  const render = async (term = '') => {
+    const { rows } = await api(`/virtual-stock?q=${encodeURIComponent(term)}`);
+    const outstanding = rows.reduce((n, r) => n + Number(r.virtual_qty), 0);
+    const risky = rows.filter((r) => r.consumed).length;
+    app.innerHTML = `
+      <div class="page-heading"><div><h1>虚拟库存管理</h1><p class="muted">用「Virtual stock adjustment」设出来、还没撤销的库存。这些商品前台显示有货，但仓库没有实物——真品卖掉或厂家停产后要及时撤销。</p></div>
+        <a class="back-link" href="#/adjustments">← 返回手动调整</a></div>
+      <div class="grid overview-grid">
+        <div class="stat"><div class="n">${rows.length}</div><div class="l">挂账商品/仓位</div></div>
+        <div class="stat"><div class="n">${outstanding}</div><div class="l">虚拟库存总量</div></div>
+        <div class="stat ${risky ? 'warn' : 'ok'}"><div class="n">${risky}</div><div class="l">需要处理</div><div class="hint">可售已低于虚拟挂账</div></div>
+      </div>
+      <div class="card">
+        <div class="row">
+          <input type="search" id="vs-q" value="${esc(term)}" placeholder="搜索商品 / Barcode / SKU…">
+          <button id="vs-search" class="secondary">搜索</button>
+          <button id="vs-revoke" disabled>撤销所选（生成待确认调整单）</button>
+        </div>
+        <div class="table-scroll"><table class="virtual-stock-table">
+          <colgroup><col class="w-check"><col><col class="w-loc"><col class="w-n"><col class="w-n"><col class="w-date"><col></colgroup>
+          <thead><tr><th></th><th>商品</th><th>仓位</th><th>虚拟挂账</th><th>当前可售</th><th>最近设置</th><th>最近备注</th></tr></thead>
+          <tbody>${rows.map((r) => `<tr class="${r.consumed ? 'row-warn' : ''}">
+            <td><input type="checkbox" class="vs-check" data-item="${r.item_id}" data-location="${r.location_id}"></td>
+            <td><a class="item-link" href="#/items/${r.item_id}">${esc(r.product_title)}</a>${variantLabel(r) ? ` <span class="variant-tag">${variantLabel(r)}</span>` : ''}<div class="muted xsmall">${esc(r.barcode || '—')}${r.sku ? ` · ${esc(r.sku)}` : ''}</div></td>
+            <td class="col-loc">${esc(r.location)}</td>
+            <td><strong>${r.virtual_qty}</strong></td>
+            <td>${r.available === null ? '<span class="muted">—</span>' : r.available}${r.consumed ? '<div class="error xsmall">已被消耗，需撤销</div>' : ''}</td>
+            <td class="col-date">${fmtDateCompact(r.last_at)}</td>
+            <td class="muted xsmall">${esc(r.last_note || '—')}</td>
+          </tr>`).join('') || '<tr><td colspan="7" class="muted">没有未撤销的虚拟库存</td></tr>'}</tbody>
+        </table></div>
+      </div>`;
+    const checks = [...document.querySelectorAll('.vs-check')];
+    const refresh = () => {
+      const n = checks.filter((c) => c.checked).length;
+      $('#vs-revoke').disabled = !n;
+      $('#vs-revoke').textContent = n ? `撤销所选 ${n} 项（生成待确认调整单）` : '撤销所选（生成待确认调整单）';
+    };
+    checks.forEach((c) => { c.onchange = refresh; });
+    $('#vs-search').onclick = () => render($('#vs-q').value);
+    $('#vs-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') render($('#vs-q').value); });
+    $('#vs-revoke').onclick = async (event) => {
+      const entries = checks.filter((c) => c.checked)
+        .map((c) => ({ itemId: Number(c.dataset.item), locationId: Number(c.dataset.location) }));
+      const person = options.staff.filter((p) => p.active)[0];
+      if (!person) return alert('请先在设置里添加至少一名员工，撤销单需要记录员工。');
+      if (!confirm(`将为所选 ${entries.length} 项生成撤销草稿（记录员工：${person.display_name}）。草稿不会立即改变 Shopify，需要你逐张确认提交。`)) return;
+      event.target.disabled = true;
+      try {
+        const { created } = await api('/virtual-stock/revoke', {
+          method: 'POST',
+          body: JSON.stringify({ entries, recordedBy: { staffId: person.id } }),
+        });
+        if (created.length === 1) { location.hash = `#/adjustments/${created[0].id}`; return; }
+        alert(`已生成 ${created.length} 张撤销草稿（按仓位分开），请到手动调整列表逐张确认。`);
+        location.hash = '#/adjustments';
+      } catch (error) { alert(`生成失败：${error.message}`); event.target.disabled = false; }
+    };
+  };
+  await render();
+}
+
 async function viewLocalItems() {
   app.innerHTML = '<div class="card">加载中…</div>';
   const render = async (term = '') => {
@@ -1244,7 +1310,7 @@ async function viewAdjustments() {
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>库存调整</h1><p class="muted">建立可审核的 Draft，并在确认后写入 Shopify Available 库存。</p></div>
-      <div class="button-group"><button id="adjustments-export" class="secondary">导出 CSV</button><a class="button" href="#/adjustments/new">新建调整</a></div>
+      <div class="button-group"><a class="button secondary" href="#/virtual-stock">虚拟库存管理</a><button id="adjustments-export" class="secondary">导出 CSV</button><a class="button" href="#/adjustments/new">新建调整</a></div>
     </div>
     <div class="card">
       <div class="adjustment-filters">
@@ -1906,6 +1972,7 @@ async function route() {
       const query = new URLSearchParams(hash.split('?')[1] || '').get('q') || '';
       return await viewSearch(query);
     }
+    if (hash.startsWith('#/virtual-stock')) return await viewVirtualStock();
     if (hash.startsWith('#/local-items')) return await viewLocalItems();
     if (hash.startsWith('#/items')) return await viewItems();
     if (hash.startsWith('#/history')) return await viewHistory();
