@@ -1250,10 +1250,10 @@ async function viewAdjustments() {
             <button id="add-reason" class="secondary small-button">添加</button></div>
         </section>
         <section>
-          <div class="section-heading"><div><h2>员工</h2><p class="muted compact">调整单里「记录员工 / 经手员工」可选的人。与 Shopify 账号无关——多名员工可共用一个账号。</p></div></div>
-          <div class="staff-list">${options.staff.map((person) => `<div class="setting-row">
+          <div class="section-heading"><div><h2>员工</h2><p class="muted compact">调整单里「记录员工 / 经手员工」可选的人。与 Shopify 账号无关——多名员工可共用一个账号。员工离职时取消 Active 即可停用：不再出现在新调整的选择菜单，历史记录照常显示。</p></div></div>
+          <div class="staff-list">${options.staff.map((person) => `<div class="setting-row ${person.active ? '' : 'inactive-row'}">
             <input type="text" value="${esc(person.display_name)}" data-staff-name="${person.id}" aria-label="员工姓名">
-            <span></span>
+            <label class="active-toggle"><input type="checkbox" data-staff-active="${person.id}" ${person.active ? 'checked' : ''}> Active</label>
             <button class="secondary small-button save-staff" data-id="${person.id}">保存</button>
             <button class="secondary small-button danger delete-staff" data-id="${person.id}" data-name="${esc(person.display_name)}">删除</button>
           </div>`).join('') || '<p class="muted">尚无员工，请在下方添加。</p>'}</div>
@@ -1359,6 +1359,9 @@ async function viewAdjustments() {
           method: 'PATCH',
           body: JSON.stringify({
             displayName: $(`[data-staff-name="${button.dataset.id}"]`).value,
+            ...($(`[data-staff-active="${button.dataset.id}"]`)
+              ? { active: $(`[data-staff-active="${button.dataset.id}"]`).checked }
+              : {}),
           }),
         });
         await viewAdjustments();

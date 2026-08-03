@@ -480,3 +480,6 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .picker-avail { white-space: nowrap; color: var(--sub); font-size: 12.5px; }
 
 .account-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+
+.active-toggle { display: flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 12.5px; }
+.setting-row.inactive-row input[type=text] { color: var(--sub); background: #fafbfb; }

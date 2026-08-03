@@ -642,16 +642,25 @@ export async function updateAdjustmentReason(id, input) {
   return result.rows[0];
 }
 
+// Partial update: only the fields present in the payload are written, so the
+// simplified settings form (name + active) never wipes other columns.
 export async function updateStaff(id, input) {
   const displayName = String(input.displayName || '').trim().slice(0, 120);
-  const employeeCode = String(input.employeeCode || '').trim().slice(0, 60) || null;
   if (!displayName) throw new Error('员工名称不能为空');
+  const sets = ['display_name=$2'];
+  const params = [Number(id), displayName];
+  if (input.employeeCode !== undefined) {
+    params.push(String(input.employeeCode || '').trim().slice(0, 60) || null);
+    sets.push(`employee_code=$${params.length}`);
+  }
+  if (input.active !== undefined) {
+    params.push(Boolean(input.active));
+    sets.push(`active=$${params.length}`);
+  }
   const result = await q(
-    `UPDATE staff
-     SET display_name=$2, employee_code=$3, active=$4
-     WHERE id=$1
+    `UPDATE staff SET ${sets.join(', ')} WHERE id=$1
      RETURNING id, shopify_user_id, employee_code, display_name, role, active`,
-    [Number(id), displayName, employeeCode, input.active !== false],
+    params,
   );
   if (!result.rowCount) throw new Error('员工不存在');
   return result.rows[0];
