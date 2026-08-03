@@ -1303,7 +1303,7 @@ async function viewAdjustments() {
     params.set('limit', '25');
     const result = await api(`/adjustments?${params}`);
     $w('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
-      <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th><th></th></tr></thead>
+      <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
         <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a>${stockyTag(row.display_number)}</td>
         <td class="col-note">${row.notes ? `<div class="note-main">${esc(row.notes)}</div>` : '<div class="note-main muted">（无备注）</div>'}<div class="muted xsmall">${esc(row.reason || '—')}</div>${row.apply_error ? `<div class="error xsmall">${esc(row.apply_error)}</div>` : ''}</td>
@@ -1311,8 +1311,8 @@ async function viewAdjustments() {
         <td class="col-loc">${esc(row.locations || '—')}</td>
         <td class="num col-qty">${row.line_count}</td><td class="num col-qty"><span class="${Number(row.total_delta) > 0 ? 'pos' : Number(row.total_delta) < 0 ? 'neg' : ''}">${signed(row.total_delta)}</span></td>
         <td class="col-date">${fmtDateCompact(row.applied_at || row.created_at)}</td>
-        <td class="col-status">${adjustmentStatus(row.status)}</td><td class="col-arrow"><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看">→</a></td>
-      </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
+        <td class="col-status">${adjustmentStatus(row.status)}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
     $w('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
       <button id="adjustments-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>

@@ -321,22 +321,20 @@ details.card[open] summary { margin-bottom: 12px; }
 .missing-state-note { max-width: 340px; margin-top: 5px; color: var(--sub); font-size: 11px; line-height: 1.4; }
 .adjustment-filters { display: grid; grid-template-columns: minmax(220px, 2fr) repeat(3, minmax(140px, 1fr)) auto; gap: 10px; margin-bottom: 12px; }
 .adjustment-filters input { width: 100%; }
-/* Adjustment list: notes are the primary content, everything else stays on a
-   single line so rows don't grow to two/three lines and feel cramped. */
-.adjustments-table { min-width: 1040px; table-layout: fixed; }
-.adjustments-table th, .adjustments-table td { padding: 10px 12px; }
-.adjustments-table .col-no { width: 104px; white-space: nowrap; }
-.adjustments-table .col-no .badge { margin-left: 5px; font-size: 10.5px; padding: 0 5px; }
+/* Adjustment list: the notes column gets the space; everything else is sized
+   to its actual content so rows stay on one line. */
+.adjustments-table { min-width: 900px; table-layout: fixed; }
+.adjustments-table th, .adjustments-table td { padding: 10px 10px; }
+.adjustments-table .col-no { width: 96px; white-space: nowrap; }
+.adjustments-table .col-no .badge { display: inline-block; margin-left: 4px; font-size: 10px; padding: 0 4px; }
 .adjustments-table .col-note { width: auto; }
 .adjustments-table .col-note .note-main { line-height: 1.5; }
-.adjustments-table .col-person { width: 110px; }
-.adjustments-table .col-loc { width: 132px; font-size: 12px; color: var(--sub); }
-.adjustments-table .col-qty { width: 62px; white-space: nowrap; }
-.adjustments-table .col-date { width: 96px; font-size: 12px; color: var(--sub); white-space: nowrap; }
-.adjustments-table .col-status { width: 92px; }
-.adjustments-table .col-arrow { width: 34px; }
-.adjustments-table .col-person, .adjustments-table .col-loc,
-.adjustments-table .col-date, .adjustments-table .col-status { overflow-wrap: anywhere; }
+.adjustments-table .col-person { width: 84px; }
+.adjustments-table .col-loc { width: 104px; font-size: 12px; color: var(--sub); }
+.adjustments-table .col-qty { width: 48px; white-space: nowrap; padding-left: 4px; padding-right: 4px; }
+.adjustments-table .col-date { width: 88px; font-size: 12px; color: var(--sub); white-space: nowrap; }
+.adjustments-table .col-status { width: 78px; }
+.adjustments-table .col-status .status-pill { font-size: 11px; padding: 1px 7px; }
 .xsmall { font-size: 11px; line-height: 1.4; margin-top: 2px; }
 .row-arrow { color: var(--blue); font-size: 17px; text-decoration: none; padding: 4px 8px; }
 .status-pill.adjustment-draft { background: #f1f2f3; color: var(--sub); }
