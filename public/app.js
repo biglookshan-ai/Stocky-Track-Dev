@@ -523,53 +523,57 @@ async function viewDashboard() {
 async function viewVirtualStock() {
   app.innerHTML = '<div class="card">加载中…</div>';
   const options = await api('/adjustment-options');
+  let showAll = false;
   const render = async (term = '') => {
-    const { rows } = await api(`/virtual-stock?q=${encodeURIComponent(term)}`);
-    const outstanding = rows.reduce((n, r) => n + Number(r.virtual_qty), 0);
-    const risky = rows.filter((r) => r.consumed).length;
+    const { rows } = await api(`/virtual-stock?q=${encodeURIComponent(term)}${showAll ? '&all=1' : ''}`);
+    const live = rows.filter((r) => r.virtual_qty > 0);
+    const total = live.reduce((n, r) => n + r.virtual_qty, 0);
     app.innerHTML = `
-      <div class="page-heading"><div><h1>虚拟库存管理</h1><p class="muted">用「Virtual stock adjustment」设出来、还没撤销的库存。这些商品前台显示有货，但仓库没有实物——真品卖掉或厂家停产后要及时撤销。</p></div>
+      <div class="page-heading"><div><h1>虚拟库存</h1><p class="muted">用「Virtual stock adjustment」设出来、现在仍然在卖的库存：前台显示有货，仓库没有实物，有人下单后才向供应商订货或从整套里拆。厂家停产或不再供货时要撤销，否则会卖出发不出的货。</p></div>
         <a class="back-link" href="#/adjustments">← 返回手动调整</a></div>
       <div class="grid overview-grid">
-        <div class="stat"><div class="n">${rows.length}</div><div class="l">挂账商品/仓位</div></div>
-        <div class="stat"><div class="n">${outstanding}</div><div class="l">虚拟库存总量</div></div>
-        <div class="stat ${risky ? 'warn' : 'ok'}"><div class="n">${risky}</div><div class="l">需要处理</div><div class="hint">可售已低于虚拟挂账</div></div>
+        <div class="stat"><div class="n">${live.length}</div><div class="l">在卖的虚拟库存条目</div><div class="hint">每条 = 一个商品在一个仓位</div></div>
+        <div class="stat"><div class="n">${total}</div><div class="l">虚拟库存件数合计</div></div>
       </div>
       <div class="card">
         <div class="row">
           <input type="search" id="vs-q" value="${esc(term)}" placeholder="搜索商品 / Barcode / SKU…">
           <button id="vs-search" class="secondary">搜索</button>
-          <button id="vs-revoke" disabled>撤销所选（生成待确认调整单）</button>
+          <label class="active-toggle"><input type="checkbox" id="vs-all" ${showAll ? 'checked' : ''}> 显示全部历史（含已卖完、已删除的产品）</label>
+          <button id="vs-revoke" disabled>撤销所选</button>
         </div>
         <div class="table-scroll"><table class="virtual-stock-table">
           <colgroup><col class="w-check"><col><col class="w-loc"><col class="w-n"><col class="w-n"><col class="w-date"><col></colgroup>
-          <thead><tr><th></th><th>商品</th><th>仓位</th><th>虚拟挂账</th><th>当前可售</th><th>最近设置</th><th>最近备注</th></tr></thead>
-          <tbody>${rows.map((r) => `<tr class="${r.consumed ? 'row-warn' : ''}">
-            <td><input type="checkbox" class="vs-check" data-item="${r.item_id}" data-location="${r.location_id}"></td>
-            <td><a class="item-link" href="#/items/${r.item_id}">${esc(r.product_title)}</a>${variantLabel(r) ? ` <span class="variant-tag">${variantLabel(r)}</span>` : ''}<div class="muted xsmall">${esc(r.barcode || '—')}${r.sku ? ` · ${esc(r.sku)}` : ''}</div></td>
+          <thead><tr><th></th><th>商品</th><th>仓位</th><th>虚拟库存</th><th>当前可售</th><th>最近设置</th><th>最近备注</th></tr></thead>
+          <tbody>${rows.map((r) => `<tr class="${r.virtual_qty > 0 ? '' : 'row-dim'}">
+            <td>${r.virtual_qty > 0 ? `<input type="checkbox" class="vs-check" data-item="${r.item_id}" data-location="${r.location_id}">` : ''}</td>
+            <td><a class="item-link" href="#/items/${r.item_id}">${esc(r.product_title || '(无标题)')}</a>${variantLabel(r) ? ` <span class="variant-tag">${variantLabel(r)}</span>` : ''}${r.deleted_product ? ' <span class="badge">已删除</span>' : ''}<div class="muted xsmall">${esc(r.barcode || '—')}${r.sku ? ` · ${esc(r.sku)}` : ''}</div></td>
             <td class="col-loc">${esc(r.location)}</td>
-            <td><strong>${r.virtual_qty}</strong></td>
-            <td>${r.available === null ? '<span class="muted">—</span>' : r.available}${r.consumed ? '<div class="error xsmall">已被消耗，需撤销</div>' : ''}</td>
+            <td><strong>${r.virtual_qty}</strong>${r.net_set !== r.virtual_qty ? `<div class="muted xsmall">累计设过 ${r.net_set}</div>` : ''}</td>
+            <td>${r.available === null ? '<span class="muted">—</span>' : r.available}</td>
             <td class="col-date">${fmtDateCompact(r.last_at)}</td>
-            <td class="muted xsmall">${esc(r.last_note || '—')}</td>
-          </tr>`).join('') || '<tr><td colspan="7" class="muted">没有未撤销的虚拟库存</td></tr>'}</tbody>
+            <td class="xsmall">${r.last_adjustment_id
+              ? `<a href="#/adjustments/${r.last_adjustment_id}">${esc(String(r.last_adjustment_number || '').replace(/^STK-/, '#') || '查看调整单')}</a> · ` : ''}<span class="muted">${esc(r.last_note || '—')}</span></td>
+          </tr>`).join('') || '<tr><td colspan="7" class="muted">当前没有在卖的虚拟库存</td></tr>'}</tbody>
         </table></div>
+        <p class="muted small">「虚拟库存」= 该仓位当前可售数量与历史虚拟设置净额的较小值。虚拟库存被买走时扣的是订单，不是虚拟调整，所以只看累计设置会越算越多；这里显示的是现在仍可能靠虚拟库存卖出的数量。</p>
       </div>`;
     const checks = [...document.querySelectorAll('.vs-check')];
     const refresh = () => {
       const n = checks.filter((c) => c.checked).length;
       $('#vs-revoke').disabled = !n;
-      $('#vs-revoke').textContent = n ? `撤销所选 ${n} 项（生成待确认调整单）` : '撤销所选（生成待确认调整单）';
+      $('#vs-revoke').textContent = n ? `撤销所选 ${n} 项` : '撤销所选';
     };
     checks.forEach((c) => { c.onchange = refresh; });
     $('#vs-search').onclick = () => render($('#vs-q').value);
     $('#vs-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') render($('#vs-q').value); });
+    $('#vs-all').onchange = (e) => { showAll = e.target.checked; render($('#vs-q').value); };
     $('#vs-revoke').onclick = async (event) => {
       const entries = checks.filter((c) => c.checked)
         .map((c) => ({ itemId: Number(c.dataset.item), locationId: Number(c.dataset.location) }));
       const person = options.staff.filter((p) => p.active)[0];
       if (!person) return alert('请先在设置里添加至少一名员工，撤销单需要记录员工。');
-      if (!confirm(`将为所选 ${entries.length} 项生成撤销草稿（记录员工：${person.display_name}）。草稿不会立即改变 Shopify，需要你逐张确认提交。`)) return;
+      if (!confirm(`将为所选 ${entries.length} 项生成撤销草稿（记录员工：${person.display_name}）。草稿不会立即改变 Shopify，需要你确认后提交。`)) return;
       event.target.disabled = true;
       try {
         const { created } = await api('/virtual-stock/revoke', {

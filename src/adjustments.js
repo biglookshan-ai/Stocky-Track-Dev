@@ -735,7 +735,7 @@ export async function adjustmentsCsv(filters = {}) {
 // virtual-stock adjustment per item+location.
 export const VIRTUAL_STOCK_REASON = 'Virtual stock adjustment';
 
-export async function listVirtualStock({ term = '', includeSettled = false } = {}) {
+export async function listVirtualStock({ term = '', showAll = false } = {}) {
   const params = [VIRTUAL_STOCK_REASON];
   let search = '';
   const clean = String(term || '').trim().slice(0, 80);
@@ -744,31 +744,49 @@ export async function listVirtualStock({ term = '', includeSettled = false } = {
     search = `AND (i.product_title ILIKE $${params.length} OR i.variant_title ILIKE $${params.length}
       OR i.sku ILIKE $${params.length} OR i.barcode ILIKE $${params.length})`;
   }
-  const having = includeSettled ? '' : 'HAVING sum(lg.delta) <> 0';
   const result = await q(`
     SELECT i.id AS item_id, i.product_title, i.variant_title, i.sku, i.barcode, i.source,
            l.id AS location_id, l.name AS location,
-           sum(lg.delta)::int AS virtual_qty,
-           count(*)::int AS entry_count,
+           sum(lg.delta)::int AS net_set,
            max(lg.occurred_at) AS last_at,
            (array_agg(lg.notes ORDER BY lg.occurred_at DESC, lg.id DESC)
               FILTER (WHERE lg.notes IS NOT NULL))[1] AS last_note,
+           (array_agg(adj.id ORDER BY lg.occurred_at DESC, lg.id DESC)
+              FILTER (WHERE adj.id IS NOT NULL))[1] AS last_adjustment_id,
+           (array_agg(adj.display_number ORDER BY lg.occurred_at DESC, lg.id DESC)
+              FILTER (WHERE adj.display_number IS NOT NULL))[1] AS last_adjustment_number,
            cl.available
     FROM inventory_ledger lg
     JOIN items i ON i.id = lg.item_id
     JOIN locations l ON l.id = lg.location_id
     LEFT JOIN current_levels cl ON cl.item_id = lg.item_id AND cl.location_id = lg.location_id
+    LEFT JOIN inventory_events e ON e.id = lg.event_id
+    LEFT JOIN adjustments adj ON adj.shopify_group_gid = e.shopify_group_gid
     WHERE lg.reason_code = $1 AND i.status <> 'deleted' ${search}
     GROUP BY i.id, l.id, cl.available
-    ${having}
-    ORDER BY sum(lg.delta) DESC, i.product_title
-    LIMIT 500`, params);
-  return result.rows.map((row) => ({
-    ...row,
-    // The virtual units are gone from stock but never formally revoked — the
-    // listing may now be sellable on nothing at all.
-    consumed: row.available !== null && Number(row.available) < Number(row.virtual_qty),
-  }));
+    ORDER BY i.product_title, l.name
+    LIMIT 1000`, params);
+
+  const rows = result.rows.map((row) => {
+    const netSet = Number(row.net_set) || 0;
+    const available = row.available === null || row.available === undefined
+      ? null : Number(row.available);
+    // Selling virtual stock consumes it through an ORDER, not through another
+    // virtual-stock adjustment, so the net of those adjustments only ever grows
+    // and is NOT the amount still outstanding. What is still riding on virtual
+    // stock today is bounded by what is actually sellable right now.
+    const current = available === null ? 0 : Math.max(0, Math.min(available, netSet));
+    return {
+      ...row,
+      net_set: netSet,
+      available,
+      virtual_qty: current,
+      deleted_product: row.source === 'local',
+    };
+  });
+  const visible = showAll ? rows : rows.filter((row) => row.virtual_qty > 0 && !row.deleted_product);
+  return visible.sort((a, b) => b.virtual_qty - a.virtual_qty
+    || String(a.product_title).localeCompare(String(b.product_title)));
 }
 
 // Build a draft that reverses the outstanding virtual quantity. A draft (not a
@@ -777,7 +795,7 @@ export async function buildVirtualStockRevokeDraft({ entries, staffId, recordedB
   if (!Array.isArray(entries) || !entries.length) throw new Error('请选择要撤销的虚拟库存');
   const reason = await q('SELECT id FROM adjustment_reasons WHERE name = $1', [VIRTUAL_STOCK_REASON]);
   if (!reason.rowCount) throw new Error(`找不到「${VIRTUAL_STOCK_REASON}」原因，请先在设置中添加`);
-  const all = await listVirtualStock({});
+  const all = await listVirtualStock({ showAll: true });
   const byKey = new Map(all.map((row) => [`${row.item_id}:${row.location_id}`, row]));
   const byLocation = new Map();
   for (const entry of entries) {

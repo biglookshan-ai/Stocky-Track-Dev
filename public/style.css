@@ -549,4 +549,4 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .virtual-stock-table col.w-loc { width: 116px; }
 .virtual-stock-table col.w-n { width: 82px; }
 .virtual-stock-table col.w-date { width: 92px; }
-.virtual-stock-table .row-warn td { background: #fffaf7; }
+.virtual-stock-table .row-dim td { opacity: .55; }

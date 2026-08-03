@@ -423,7 +423,10 @@ api.get('/setup/webhooks', async (req, res) => {
 // holding it physically, derived from the ledger's virtual-stock adjustments.
 api.get('/virtual-stock', async (req, res) => {
   try {
-    res.json({ rows: await listVirtualStock({ term: req.query.q }) });
+    res.json({ rows: await listVirtualStock({
+      term: req.query.q,
+      showAll: String(req.query.all || '') === '1',
+    }) });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
