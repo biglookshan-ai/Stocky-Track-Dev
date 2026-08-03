@@ -10,11 +10,15 @@
 </head>
 <body>
   <header class="topbar">
+    <div class="nav-history-controls" aria-label="页面历史">
+      <button id="app-back" class="secondary" type="button" aria-label="返回上一级" title="返回上一级">←</button>
+      <button id="app-forward" class="secondary" type="button" aria-label="前进" title="前进">→</button>
+    </div>
     <nav>
-      <a href="#/dashboard" data-nav="dashboard">首页</a>
-      <a href="#/adjustments" data-nav="adjustments">手动调整</a>
-      <a href="#/history" data-nav="history">库存历史</a>
-      <a href="#/items" data-nav="items">产品列表</a>
+      <a href="/dashboard" data-nav="dashboard">首页</a>
+      <a href="/adjustments" data-nav="adjustments">手动调整</a>
+      <a href="/history" data-nav="history">库存历史</a>
+      <a href="/items" data-nav="items">产品列表</a>
     </nav>
     <form id="global-search" class="global-search" role="search">
       <input id="global-search-input" type="search" maxlength="120"
@@ -24,6 +28,7 @@
   </header>
   <main id="app"><div class="card">加载中…</div></main>
   <script src="/session-client.js"></script>
+  <script src="/navigation.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -22,6 +22,7 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 - `src/adjustments.js` — 调整单 Draft / 提交 / 幂等重试 / 归档 / 原因与员工映射 / CSV
 - `src/adjustment-attachments.js` — 调整证据附件校验、Volume 文件存储与访问控制
 - `src/adjustment-core.js` — 调整输入校验、Shopify reason 映射和 mutation input 纯逻辑
+- `public/navigation.js` — App Bridge 兼容的 clean URL、浏览历史、前进/后退与旧 hash 路由迁移
 - `migrations/` — 全部表结构（含 M2/M3 的调整/盘点/虚拟库存/BOM，先建好）
 
 当前业务界面支持 Brand、Collection、Available 和最近库存修改时间筛选/排序；
@@ -30,6 +31,9 @@ webhook 实时层（自算 delta）→ 归因层（订单/退款匹配 + 后续 
 为第一识别字段，Barcode、SKU、Brand 紧凑显示在标题下方；商品列表重点展示
 Unavailable、Committed、Available、On hand、Incoming。全店每条修改事件均可展开查看
 涉及商品、仓位和各库存状态变化，多商品事件也会列出完整明细。
+所有主要页面和详情都使用可直接打开的独立路径（如 `/items/123`、`/history/456`）；
+列表筛选、排序和页码会保存在 URL 中，浏览器与页面顶栏的前进/后退可恢复原访问顺序和列表状态。
+旧版 `#/...` 链接打开后会自动迁移到对应的新路径。
 
 「库存调整」支持 Stocky 风格的多商品 Draft：按 Barcode / SKU / 标题搜索、选择仓位和
 Adjustment reason，并分别记录 Shopify 登录账号、实际记录员工和一个或多个经手员工。

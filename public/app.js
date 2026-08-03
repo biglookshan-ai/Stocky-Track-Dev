@@ -15,6 +15,36 @@ let navGeneration = 0;
 const currentNav = () => navGeneration;
 const isCurrent = (gen) => gen === navGeneration;
 const $w = (sel) => $(sel) || document.createElement('div');
+let navigationController = null;
+
+const routeParams = () => new URLSearchParams(location.search);
+const pageNumber = (value) => {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number > 0 ? number : 1;
+};
+const routeUrl = (pathname, values = {}) => {
+  const params = new URLSearchParams();
+  Object.entries(values).forEach(([name, value]) => {
+    if (value !== '' && value !== null && value !== undefined && value !== false) {
+      params.set(name, String(value));
+    }
+  });
+  const search = params.toString();
+  return `${pathname}${search ? `?${search}` : ''}`;
+};
+const syncNavigationControls = () => {
+  const back = $('#app-back');
+  const forward = $('#app-forward');
+  if (back) back.disabled = !navigationController?.canGoBack();
+  if (forward) forward.disabled = !navigationController?.canGoForward();
+};
+const navigateTo = (url, { replace = false, render = true } = {}) => {
+  navigationController.navigate(url, { replace });
+  syncNavigationControls();
+  if (render) route();
+};
+const backLink = (fallback, label = '返回上一级') =>
+  `<a class="back-link" href="${fallback}" data-app-back>← ${label}</a>`;
 
 const sessionClient = window.InventorySessionClient.create({
   getToken: async () => {
@@ -206,7 +236,7 @@ const referenceCell = (row, shopHandle) => {
   // A manual adjustment (imported or app-created) links to its detail page,
   // labelled with the SAME number the list/detail pages show (display_number).
   if (row.adjustment_id) {
-    return `<a href="#/adjustments/${row.adjustment_id}">调整单 ${adjustmentNumber(row.adjustment_number, row.adjustment_display_number)}</a>`;
+    return `<a href="/adjustments/${row.adjustment_id}">调整单 ${adjustmentNumber(row.adjustment_number, row.adjustment_display_number)}</a>`;
   }
   const ref = gidParts(row.reference_document_uri);
   const type = row.reference_document_type || ref?.type;
@@ -306,10 +336,11 @@ const missingWebhookScopes = (state) => {
 
 // ---- views ----
 
-async function viewDashboard() {
+async function viewDashboard(params = routeParams()) {
+  let recentPage = pageNumber(params.get('recentPage'));
   const [s, initialRecent] = await Promise.all([
     api('/status'),
-    api('/recent-items?page=1&limit=10'),
+    api(`/recent-items?page=${recentPage}&limit=10`),
   ]);
   const sync = s.initialSync;
   const snap = s.lastSnapshot;
@@ -330,10 +361,10 @@ async function viewDashboard() {
       <div><h1>库存概览</h1><p class="muted">查看商品、修改记录和数据同步状态。</p></div>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>最近 3 天库存变动</h2><p class="muted compact">每个商品显示最近一次库存修改。</p></div><a class="subtle-link" href="#/history">查看全部修改记录 →</a></div>
+      <div class="card-heading"><div><h2>最近 3 天库存变动</h2><p class="muted compact">每个商品显示最近一次库存修改。</p></div><a class="subtle-link" href="/history">查看全部修改记录 →</a></div>
       <div class="table-scroll"><table class="recent-products"><thead><tr><th>商品</th><th>Activity</th><th>Created by</th><th>Location</th><th class="num">Available</th><th>Last change</th></tr></thead>
       <tbody id="recent-products-body">${initialRecent.rows.map((row) => `<tr>
-        <td><a class="item-link" href="#/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
+        <td><a class="item-link" href="/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
         <td>${esc(activityLabel(row.activity))}<div>${srcBadge(row.source_type)}</div></td>
         <td>${actorCell(row)}</td><td>${esc(row.locations)}</td>
         <td class="num">${row.total_available}</td>
@@ -342,14 +373,14 @@ async function viewDashboard() {
       <div id="recent-products-pagination" class="pagination"></div>
     </div>
     <div class="grid overview-grid">
-      <a class="stat stat-link" href="#/items"><div class="n">${s.items.n}</div><div class="l">商品 / Barcode</div><div class="hint">查看商品与各仓库存</div></a>
-      <a class="stat stat-link" href="#/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
-      <a class="stat stat-link" href="#/history"><div class="n range">${coverage}</div><div class="l">已保存的历史范围</div><div class="hint">点击查看历史修改记录</div></a>
-      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="#/system"><div class="n">${hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? '有同步状态需要查看' : '实时记录与 Shopify 当前库存正常'}</div></a>
+      <a class="stat stat-link" href="/items"><div class="n">${s.items.n}</div><div class="l">商品 / Barcode</div><div class="hint">查看商品与各仓库存</div></a>
+      <a class="stat stat-link" href="/history"><div class="n">${s.events.n}</div><div class="l">修改记录</div><div class="hint">按一次操作合并显示</div></a>
+      <a class="stat stat-link" href="/history"><div class="n range">${coverage}</div><div class="l">已保存的历史范围</div><div class="hint">点击查看历史修改记录</div></a>
+      <a class="stat stat-link ${hasAttention ? 'warn' : 'ok'}" href="/system"><div class="n">${hasAttention ? '需查看' : '正常'}</div><div class="l">系统状态</div><div class="hint">${hasAttention ? '有同步状态需要查看' : '实时记录与 Shopify 当前库存正常'}</div></a>
     </div>
     <div class="card">
       <div class="card-heading"><div><h2>数据同步</h2><p class="muted compact">数字实时；记录等 Shopify 官方流水确认后入账；每天凌晨全量核对。</p></div>
-        <div class="heading-actions"><a class="subtle-link" href="#/system">查看详情 →</a>
+        <div class="heading-actions"><a class="subtle-link" href="/system">查看详情 →</a>
           <span class="status-pill ${historyStatus.className}">${historyStatus.text}</span>
         </div>
       </div>
@@ -416,10 +447,9 @@ async function viewDashboard() {
       <p class="muted compact">这些工具仅用于安装、恢复或手动刷新；日常使用无需点击。</p>
     </details>
     <div class="notice"><strong>历史范围说明：</strong>Shopify 商品 Adjustment history 页面提供最近 180 天。本应用会永久保存已经采集或导入的记录；要补齐更早的 Stocky 历史，需要后续导入 Stocky 导出文件。</div>`;
-  let recentPage = 1;
   const renderRecent = (result) => {
     $w('#recent-products-body').innerHTML = result.rows.map((row) => `<tr>
-      <td><a class="item-link" href="#/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
+      <td><a class="item-link" href="/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
       <td>${esc(activityLabel(row.activity))}<div>${srcBadge(row.source_type)}</div></td>
       <td>${actorCell(row)}</td><td>${esc(row.locations)}</td>
       <td class="num">${row.total_available}</td>
@@ -430,14 +460,12 @@ async function viewDashboard() {
       <button id="recent-prev" class="secondary" ${recentPage <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${recentPage} / ${pages} 页 · 每页 10 个商品</span>
       <button id="recent-next" class="secondary" ${recentPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
-    if ($('#recent-prev')) $('#recent-prev').onclick = async () => {
-      recentPage--;
-      renderRecent(await api(`/recent-items?page=${recentPage}&limit=10`));
-    };
-    if ($('#recent-next')) $('#recent-next').onclick = async () => {
-      recentPage++;
-      renderRecent(await api(`/recent-items?page=${recentPage}&limit=10`));
-    };
+    if ($('#recent-prev')) $('#recent-prev').onclick = () => navigateTo(routeUrl('/dashboard', {
+      recentPage: recentPage - 1 > 1 ? recentPage - 1 : '',
+    }));
+    if ($('#recent-next')) $('#recent-next').onclick = () => navigateTo(routeUrl('/dashboard', {
+      recentPage: recentPage + 1,
+    }));
   };
   renderRecent(initialRecent);
   const guard = (fn) => async (e) => {
@@ -520,17 +548,18 @@ async function viewDashboard() {
 }
 
 
-async function viewVirtualStock() {
+async function viewVirtualStock(params = routeParams()) {
   app.innerHTML = '<div class="card">加载中…</div>';
   const options = await api('/adjustment-options');
-  let locationId = '';
-  const render = async (term = '') => {
+  let locationId = params.get('location') || '';
+  const initialTerm = params.get('q') || '';
+  const render = async (term = initialTerm) => {
     const { rows, locations } = await api(`/virtual-stock?q=${encodeURIComponent(term)}&location=${locationId}`);
     const total = rows.reduce((n, r) => n + r.virtual_qty, 0);
     const current = locations.find((l) => String(l.id) === String(locationId)) || locations[0];
     app.innerHTML = `
       <div class="page-heading"><div><h1>虚拟库存</h1><p class="muted">${esc(current ? current.name : '')} 不放实物，凡是在这个仓库有库存的都是虚拟库存：前台照常显示有货，客人下单后我们再向供应商订货或从整套里拆。厂家停产或不再供货时,在这里勾选撤销。</p></div>
-        <a class="back-link" href="#/adjustments">← 返回手动调整</a></div>
+        ${backLink('/adjustments', '返回上一级')}</div>
       <div class="grid overview-grid">
         <div class="stat"><div class="n">${rows.length}</div><div class="l">有虚拟库存的商品</div></div>
         <div class="stat"><div class="n">${total}</div><div class="l">虚拟库存件数合计</div></div>
@@ -547,11 +576,11 @@ async function viewVirtualStock() {
           <thead><tr><th></th><th>商品</th><th>虚拟库存</th><th>最近设置</th><th>最近备注</th></tr></thead>
           <tbody>${rows.map((r) => `<tr>
             <td><input type="checkbox" class="vs-check" data-item="${r.item_id}" data-location="${r.location_id}"></td>
-            <td><a class="item-link" href="#/items/${r.item_id}">${esc(r.product_title || '(无标题)')}</a>${variantLabel(r) ? ` <span class="variant-tag">${variantLabel(r)}</span>` : ''}<div class="muted xsmall">${esc(r.barcode || '—')}${r.sku ? ` · ${esc(r.sku)}` : ''}</div></td>
+            <td><a class="item-link" href="/items/${r.item_id}">${esc(r.product_title || '(无标题)')}</a>${variantLabel(r) ? ` <span class="variant-tag">${variantLabel(r)}</span>` : ''}<div class="muted xsmall">${esc(r.barcode || '—')}${r.sku ? ` · ${esc(r.sku)}` : ''}</div></td>
             <td><strong>${r.virtual_qty}</strong></td>
             <td class="col-date">${r.last_at ? fmtDateCompact(r.last_at) : '<span class="muted">—</span>'}</td>
             <td class="xsmall">${r.last_adjustment_id
-              ? `<a href="#/adjustments/${r.last_adjustment_id}">${esc(String(r.last_adjustment_number || '').replace(/^STK-/, '#') || '查看调整单')}</a> · ` : ''}<span class="muted">${esc(r.last_note || '—')}</span></td>
+              ? `<a href="/adjustments/${r.last_adjustment_id}">${esc(String(r.last_adjustment_number || '').replace(/^STK-/, '#') || '查看调整单')}</a> · ` : ''}<span class="muted">${esc(r.last_note || '—')}</span></td>
           </tr>`).join('') || '<tr><td colspan="5" class="muted">这个仓库当前没有库存</td></tr>'}</tbody>
         </table></div>
       </div>`;
@@ -562,9 +591,13 @@ async function viewVirtualStock() {
       $('#vs-revoke').textContent = n ? `撤销所选 ${n} 项` : '撤销所选';
     };
     checks.forEach((c) => { c.onchange = refresh; });
-    $('#vs-search').onclick = () => render($('#vs-q').value);
-    $('#vs-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') render($('#vs-q').value); });
-    $('#vs-loc').onchange = (e) => { locationId = e.target.value; render($('#vs-q').value); };
+    const navigateFilters = () => navigateTo(routeUrl('/virtual-stock', {
+      q: $('#vs-q').value.trim(),
+      location: $('#vs-loc').value,
+    }));
+    $('#vs-search').onclick = navigateFilters;
+    $('#vs-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') navigateFilters(); });
+    $('#vs-loc').onchange = navigateFilters;
     $('#vs-revoke').onclick = async (event) => {
       const entries = checks.filter((c) => c.checked)
         .map((c) => ({ itemId: Number(c.dataset.item), locationId: Number(c.dataset.location) }));
@@ -577,62 +610,67 @@ async function viewVirtualStock() {
           method: 'POST',
           body: JSON.stringify({ entries, recordedBy: { staffId: person.id } }),
         });
-        if (created.length === 1) { location.hash = `#/adjustments/${created[0].id}`; return; }
+        if (created.length === 1) { navigateTo(`/adjustments/${created[0].id}`); return; }
         alert(`已生成 ${created.length} 张撤销草稿，请到手动调整列表逐张确认。`);
-        location.hash = '#/adjustments';
+        navigateTo('/adjustments');
       } catch (error) { alert(`生成失败：${error.message}`); event.target.disabled = false; }
     };
   };
   await render();
 }
 
-async function viewLocalItems() {
+async function viewLocalItems(params = routeParams()) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  const render = async (term = '') => {
+  const render = async (term = params.get('q') || '') => {
     const { rows, total } = await api(`/local-items?q=${encodeURIComponent(term)}`);
     app.innerHTML = `
-      <div class="page-heading"><div><h1>Shopify 已删除产品（${total}）</h1><p class="muted">这些产品在导入时按 Barcode 和 SKU 都在当前 Shopify 目录里找不到——基本是这几年停产/下架、已从 Shopify 删除的旧品，以及 Stocky 内部 # 组件。系统保留它们，只为不丢失其历史调整记录。</p></div><a class="back-link" href="#/items">← 返回商品</a></div>
+      <div class="page-heading"><div><h1>Shopify 已删除产品（${total}）</h1><p class="muted">这些产品在导入时按 Barcode 和 SKU 都在当前 Shopify 目录里找不到——基本是这几年停产/下架、已从 Shopify 删除的旧品，以及 Stocky 内部 # 组件。系统保留它们，只为不丢失其历史调整记录。</p></div>${backLink('/items', '返回上一级')}</div>
       <div class="card">
         <div class="row"><input type="search" id="local-q" value="${esc(term)}" placeholder="搜索标题 / Barcode / SKU…"><button id="local-search" class="secondary">搜索</button></div>
         <div class="table-scroll"><table>
           <thead><tr><th>商品</th><th>变体</th><th>Barcode</th><th>SKU</th><th class="num">调整单数</th><th>出现在（点击跳转）</th></tr></thead>
           <tbody>${rows.map((r) => `<tr>
-            <td><a class="item-link" href="#/items/${r.id}">${esc(r.product_title || '(无标题)')}</a></td>
+            <td><a class="item-link" href="/items/${r.id}">${esc(r.product_title || '(无标题)')}</a></td>
             <td>${variantLabel(r) || '<span class="muted">—</span>'}</td>
             <td><strong>${esc(r.barcode || '—')}</strong></td><td>${esc(r.sku || '—')}</td>
             <td class="num">${r.adjustment_count}</td>
-            <td class="small">${(r.adjustments || []).map((a) => `<a href="#/adjustments/${a.id}">${esc(String(a.no || '').replace(/^STK-/, '#'))}</a>`).join('、')}</td>
+            <td class="small">${(r.adjustments || []).map((a) => `<a href="/adjustments/${a.id}">${esc(String(a.no || '').replace(/^STK-/, '#'))}</a>`).join('、')}</td>
           </tr>`).join('') || '<tr><td colspan="6" class="muted">没有已删除产品</td></tr>'}</tbody>
         </table></div>
         ${total > rows.length ? `<p class="muted small">显示前 ${rows.length} 个（共 ${total}），用搜索缩小范围。</p>` : ''}
       </div>`;
-    $('#local-search').onclick = () => render($('#local-q').value);
-    $('#local-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') render($('#local-q').value); });
+    const navigateSearch = () => navigateTo(routeUrl('/local-items', { q: $('#local-q').value.trim() }));
+    $('#local-search').onclick = navigateSearch;
+    $('#local-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') navigateSearch(); });
   };
   await render();
 }
 
-async function viewItems() {
+async function viewItems(params = routeParams()) {
   const options = await api('/item-options');
-  let page = 1;
+  const filters = {
+    q: params.get('q') || '',
+    vendor: params.get('vendor') || '',
+    collection: params.get('collection') || '',
+    sort: params.get('sort') || 'updated_desc',
+  };
+  const page = pageNumber(params.get('page'));
   app.innerHTML = `
     <div class="page-heading"><div><h1>产品列表</h1><p class="muted">按 Brand、Collection、库存或最近修改时间查找商品。</p></div>
-      <div class="button-group"><a class="button secondary" href="#/local-items">Shopify 已删除产品</a></div></div>
+      <div class="button-group"><a class="button secondary" href="/local-items">Shopify 已删除产品</a></div></div>
     <div class="card">
       <div class="filter-grid">
-        <input type="search" id="q" placeholder="搜索 Barcode / 标题 / SKU / 品牌…">
-        <select id="vendor-filter"><option value="">全部 Brand</option>${options.vendors.map((vendor) => `<option value="${esc(vendor)}">${esc(vendor)}</option>`).join('')}</select>
-        <select id="collection-filter"><option value="">全部 Collection</option>${options.collections.map((collection) => `<option value="${esc(collection.id)}">${esc(collection.title)}</option>`).join('')}</select>
+        <input type="search" id="q" value="${esc(filters.q)}" placeholder="搜索 Barcode / 标题 / SKU / 品牌…">
+        <select id="vendor-filter"><option value="">全部 Brand</option>${options.vendors.map((vendor) => `<option value="${esc(vendor)}" ${filters.vendor === vendor ? 'selected' : ''}>${esc(vendor)}</option>`).join('')}</select>
+        <select id="collection-filter"><option value="">全部 Collection</option>${options.collections.map((collection) => `<option value="${esc(collection.id)}" ${filters.collection === String(collection.id) ? 'selected' : ''}>${esc(collection.title)}</option>`).join('')}</select>
         <select id="item-sort">
-          <option value="updated_desc">最近修改：新 → 旧</option>
-          <option value="updated_asc">最近修改：旧 → 新</option>
-          <option value="stock_desc">Available：高 → 低</option>
-          <option value="stock_asc">Available：低 → 高</option>
-          <option value="brand_asc">Brand：A → Z</option>
-          <option value="brand_desc">Brand：Z → A</option>
-          <option value="name_asc">商品名称：A → Z</option>
-          <option value="name_desc">商品名称：Z → A</option>
-          <option value="collection">Collection 默认顺序</option>
+          ${[
+            ['updated_desc', '最近修改：新 → 旧'], ['updated_asc', '最近修改：旧 → 新'],
+            ['stock_desc', 'Available：高 → 低'], ['stock_asc', 'Available：低 → 高'],
+            ['brand_asc', 'Brand：A → Z'], ['brand_desc', 'Brand：Z → A'],
+            ['name_asc', '商品名称：A → Z'], ['name_desc', '商品名称：Z → A'],
+            ['collection', 'Collection 默认顺序'],
+          ].map(([value, label]) => `<option value="${value}" ${filters.sort === value ? 'selected' : ''}>${label}</option>`).join('')}
         </select>
         <button id="btn-search" class="secondary">应用</button>
       </div>
@@ -644,10 +682,7 @@ async function viewItems() {
     $w('#items-out').innerHTML = '加载中…';
     try {
       const params = new URLSearchParams({
-        q: $('#q').value,
-        vendor: $('#vendor-filter').value,
-        collection: $('#collection-filter').value,
-        sort: $('#item-sort').value,
+        ...filters,
         page: String(page),
         limit: '50',
       });
@@ -657,7 +692,7 @@ async function viewItems() {
       $w('#items-out').innerHTML = rows.length ? `
         <div class="table-scroll"><table class="items-table"><thead><tr><th>商品</th><th class="num">Unavailable</th><th class="num">Committed</th><th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th><th>最近库存修改</th><th>最近修改时间</th></tr></thead>
         <tbody>${rows.map((r) => `<tr>
-          <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">已删除</span>' : ''}${codeMeta(r)}</td>
+          <td><a class="item-link" href="/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">已删除</span>' : ''}${codeMeta(r)}</td>
           <td class="num">${stockValue(r.total_unavailable)}</td>
           <td class="num">${stockValue(r.total_committed)}</td>
           <td class="num">${stockValue(r.total_available)}</td>
@@ -670,21 +705,31 @@ async function viewItems() {
         <button id="items-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
         <span>第 ${page} / ${pages} 页</span>
         <button id="items-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : '';
-      if ($('#items-prev')) $('#items-prev').onclick = () => { page--; run(); };
-      if ($('#items-next')) $('#items-next').onclick = () => { page++; run(); };
+      const listUrl = (nextPage) => routeUrl('/items', {
+        ...filters,
+        sort: filters.sort === 'updated_desc' ? '' : filters.sort,
+        page: nextPage > 1 ? nextPage : '',
+      });
+      if ($('#items-prev')) $('#items-prev').onclick = () => navigateTo(listUrl(page - 1));
+      if ($('#items-next')) $('#items-next').onclick = () => navigateTo(listUrl(page + 1));
     } catch (e) { $w('#items-out').innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   };
-  const resetAndRun = () => { page = 1; run(); };
-  $('#btn-search').onclick = resetAndRun;
-  $('#vendor-filter').onchange = resetAndRun;
+  const applyFilters = () => navigateTo(routeUrl('/items', {
+    q: $('#q').value.trim(),
+    vendor: $('#vendor-filter').value,
+    collection: $('#collection-filter').value,
+    sort: $('#item-sort').value === 'updated_desc' ? '' : $('#item-sort').value,
+  }));
+  $('#btn-search').onclick = applyFilters;
+  $('#vendor-filter').onchange = applyFilters;
   $('#collection-filter').onchange = () => {
     if ($('#collection-filter').value && $('#item-sort').value === 'updated_desc') {
       $('#item-sort').value = 'collection';
     }
-    resetAndRun();
+    applyFilters();
   };
-  $('#item-sort').onchange = resetAndRun;
-  $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') resetAndRun(); });
+  $('#item-sort').onchange = applyFilters;
+  $('#q').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilters(); });
   await run();
 }
 
@@ -998,13 +1043,14 @@ function renderSalesHistory(data) {
     </table></div>`;
 }
 
-async function viewItem(id) {
+async function viewItem(id, params = routeParams()) {
   app.innerHTML = '<div class="card">加载中…</div>';
   const { item, levels, shopHandle, links, lastChange } = await api(`/items/${id}`);
+  document.title = `${item.product_title || '商品详情'} · Inventory`;
   const latestLevelUpdate = levels.reduce((latest, level) =>
     !latest || +new Date(level.updated_at) > +new Date(latest) ? level.updated_at : latest, null);
   app.innerHTML = `
-    <p><a class="back-link" href="#/items">← 返回商品</a></p>
+    <p>${backLink('/items', '返回上一级')}</p>
     <div class="card">
       <div class="card-heading"><h2>${productName(item)}</h2><div class="button-group">
         ${links.storefront ? `<a class="button secondary" href="${esc(links.storefront)}" target="_blank" rel="noopener">查看前台商品 ↗</a>` : '<span class="button secondary disabled">前台未发布</span>'}
@@ -1054,6 +1100,34 @@ async function viewItem(id) {
     </div>
     <div class="notice"><strong>关于历史期限：</strong>Shopify 商品页仅显示最近 180 天；本应用会长期保留已采集记录。当前最早日期取决于首次同步时间，Stocky 更早历史需通过导入补齐。</div>`;
 
+  const initialTrendState = TREND_METRICS[params.get('trend')] ? params.get('trend') : 'available';
+  const initialTrendRange = CHART_RANGES[params.get('trendRange')] ? params.get('trendRange') : '30';
+  const initialTrendLocation = levels.some((level) => String(level.location_id) === params.get('trendLocation'))
+    ? params.get('trendLocation') : '';
+  const initialSalesRange = SALES_RANGE_LABELS[params.get('salesRange')] ? params.get('salesRange') : '30';
+  const initialHistoryLocation = levels.some((level) => level.name === params.get('historyLocation'))
+    ? params.get('historyLocation') : '';
+  $('#trend-state').value = initialTrendState;
+  $('#trend-range').value = initialTrendRange;
+  $('#trend-location').value = initialTrendLocation;
+  $('#sales-range').value = initialSalesRange;
+  $('#history-location').value = initialHistoryLocation;
+
+  let salesPage = pageNumber(params.get('salesPage'));
+  let historyPage = pageNumber(params.get('historyPage'));
+  // Detail controls describe the current product page rather than a new page
+  // in the hierarchy. Replace this entry so "返回上一级" still returns to the
+  // list/search/history page that opened the product.
+  const updateDetailUrl = () => navigateTo(routeUrl(`/items/${id}`, {
+    trend: $('#trend-state').value === 'available' ? '' : $('#trend-state').value,
+    trendLocation: $('#trend-location').value,
+    trendRange: $('#trend-range').value === '30' ? '' : $('#trend-range').value,
+    salesRange: $('#sales-range').value === '30' ? '' : $('#sales-range').value,
+    salesPage: salesPage > 1 ? salesPage : '',
+    historyLocation: $('#history-location').value,
+    historyPage: historyPage > 1 ? historyPage : '',
+  }), { replace: true, render: false });
+
   let trendRequest = 0;
   const loadTrend = async () => {
     const request = ++trendRequest;
@@ -1072,12 +1146,12 @@ async function viewItem(id) {
       if (request === trendRequest) $w('#inventory-trend').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
     }
   };
-  $('#trend-state').onchange = loadTrend;
-  $('#trend-location').onchange = loadTrend;
-  $('#trend-range').onchange = loadTrend;
+  const changeTrend = () => { updateDetailUrl(); loadTrend(); };
+  $('#trend-state').onchange = changeTrend;
+  $('#trend-location').onchange = changeTrend;
+  $('#trend-range').onchange = changeTrend;
   loadTrend();
 
-  let salesPage = 1;
   const loadSales = async () => {
     const params = new URLSearchParams({
       range: $('#sales-range').value,
@@ -1094,15 +1168,14 @@ async function viewItem(id) {
         <button id="sales-prev" class="secondary" ${salesPage <= 1 ? 'disabled' : ''}>上一页</button>
         <span>第 ${salesPage} / ${pages} 页</span>
         <button id="sales-next" class="secondary" ${salesPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
-      if ($('#sales-prev')) $('#sales-prev').onclick = () => { salesPage--; loadSales(); };
-      if ($('#sales-next')) $('#sales-next').onclick = () => { salesPage++; loadSales(); };
+      if ($('#sales-prev')) $('#sales-prev').onclick = () => { salesPage--; updateDetailUrl(); loadSales(); };
+      if ($('#sales-next')) $('#sales-next').onclick = () => { salesPage++; updateDetailUrl(); loadSales(); };
     } catch (error) {
       $w('#sales-history').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
     }
   };
-  $('#sales-range').onchange = () => { salesPage = 1; loadSales(); };
+  $('#sales-range').onchange = () => { salesPage = 1; updateDetailUrl(); loadSales(); };
 
-  let historyPage = 1;
   const loadHistory = async () => {
     const location = $('#history-location').value;
     const suffix = location ? `&location=${encodeURIComponent(location)}` : '';
@@ -1117,10 +1190,10 @@ async function viewItem(id) {
       <button id="history-prev" class="secondary" ${historyPage <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${historyPage} / ${pages} 页</span>
       <button id="history-next" class="secondary" ${historyPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
-    if ($('#history-prev')) $('#history-prev').onclick = () => { historyPage--; loadHistory(); };
-    if ($('#history-next')) $('#history-next').onclick = () => { historyPage++; loadHistory(); };
+    if ($('#history-prev')) $('#history-prev').onclick = () => { historyPage--; updateDetailUrl(); loadHistory(); };
+    if ($('#history-next')) $('#history-next').onclick = () => { historyPage++; updateDetailUrl(); loadHistory(); };
   };
-  $('#history-location').onchange = () => { historyPage = 1; loadHistory(); };
+  $('#history-location').onchange = () => { historyPage = 1; updateDetailUrl(); loadHistory(); };
   await Promise.all([loadSales(), loadHistory()]);
 }
 
@@ -1139,7 +1212,7 @@ async function viewSystem() {
     ? { value: '已刷新', hint: fmtDate(status.lastSnapshot.finishedAt || status.lastSnapshot.snapDate), className: 'ok' }
     : { value: '未开始', hint: '可从首页维护工具刷新', className: 'warn' };
   app.innerHTML = `
-    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div><a class="back-link" href="#/dashboard">← 返回首页</a></div>
+    <div class="page-heading"><div><h1>系统状态</h1><p class="muted">查看实时接收、信息补全和 Shopify 数据同步进度。</p></div>${backLink('/dashboard', '返回上一级')}</div>
     <div class="grid system-stat-grid">
       <div class="stat ${status.webhookBacklog ? 'warn' : 'ok'}"><div class="n">${status.webhookBacklog}</div><div class="l">实时接收队列</div><div class="hint">通常应为 0</div></div>
       <div class="stat"><div class="n">${status.pendingAttribution}</div><div class="l status-label">等待官方流水 ${infoTip(STATUS_HELP.completion)}</div><div class="hint">官方流水回传后自动入账，通常几分钟</div></div>
@@ -1157,10 +1230,16 @@ async function viewSystem() {
     </div>`;
 }
 
-async function viewHistory() {
+async function viewHistory(params = routeParams()) {
   app.innerHTML = '<div class="card">加载中…</div>';
-  let page = 1;
-  const filters = { q: '', person: '', source: '', dateFrom: '', dateTo: '' };
+  const page = pageNumber(params.get('page'));
+  const filters = {
+    q: params.get('q') || '',
+    person: params.get('person') || '',
+    source: params.get('source') || '',
+    dateFrom: params.get('from') || '',
+    dateTo: params.get('to') || '',
+  };
   const load = async () => {
     const params = new URLSearchParams({ ...filters, page, limit: 50 });
     const result = await api(`/history?${params}`);
@@ -1188,10 +1267,10 @@ async function viewHistory() {
             // Multi-variant events expand inline (one product per line) instead
             // of only being visible after clicking into the detail page.
             const product = row.product_count === 1
-              ? `<a class="history-event-link" href="#/history/${row.id}" title="查看本次修改详情"><span class="event-product-title">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</span>${codeMeta(row)}<span class="history-arrow" aria-hidden="true">→</span></a>`
+              ? `<a class="history-event-link" href="/history/${row.id}" title="查看本次修改详情"><span class="event-product-title">${esc(row.product_title)}${row.variant_title && row.variant_title !== 'Default Title' ? ` / ${esc(row.variant_title)}` : ''}</span>${codeMeta(row)}<span class="history-arrow" aria-hidden="true">→</span></a>`
               : `<details class="product-expand"><summary><strong>${row.product_count} 个商品变体</strong></summary>
-                  <ul class="product-lines">${(row.products || []).map((p) => `<li><a class="item-link" href="#/items/${p.id}">${esc(p.product_title)}${p.variant_title && p.variant_title !== 'Default Title' ? ` / ${esc(p.variant_title)}` : ''}</a> <span class="muted">${esc(p.barcode || p.sku || '')}</span></li>`).join('')}</ul>
-                  <a class="subtle-link" href="#/history/${row.id}">查看本次修改详情 →</a></details>`;
+                  <ul class="product-lines">${(row.products || []).map((p) => `<li><a class="item-link" href="/items/${p.id}">${esc(p.product_title)}${p.variant_title && p.variant_title !== 'Default Title' ? ` / ${esc(p.variant_title)}` : ''}</a> <span class="muted">${esc(p.barcode || p.sku || '')}</span></li>`).join('')}</ul>
+                  <a class="subtle-link" href="/history/${row.id}">查看本次修改详情 →</a></details>`;
             return `<tr><td>${fmtDate(row.occurred_at)}</td>
               <td><span class="activity">${esc(activityLabel(row.activity))}</span><div>${srcBadge(row.source_type)}</div></td>
               <td>${actorCell(row)}</td><td>${product}</td><td>${esc(row.locations)}</td>
@@ -1205,13 +1284,13 @@ async function viewHistory() {
       </div>
       <div class="notice">这里显示的是业务层面的修改事件，不再展示系统内部的逐状态技术流水。商品详情页可查看每次修改对 Available、On hand 等状态的具体影响。</div>`;
     const applyFilters = () => {
-      filters.q = $('#history-q').value.trim();
-      filters.person = $('#history-person').value.trim();
-      filters.source = $('#history-source').value;
-      filters.dateFrom = $('#history-from').value;
-      filters.dateTo = $('#history-to').value;
-      page = 1;
-      load();
+      navigateTo(routeUrl('/history', {
+        q: $('#history-q').value.trim(),
+        person: $('#history-person').value.trim(),
+        source: $('#history-source').value,
+        from: $('#history-from').value,
+        to: $('#history-to').value,
+      }));
     };
     $('#history-filter').onclick = applyFilters;
     $('#history-source').onchange = applyFilters;
@@ -1220,8 +1299,16 @@ async function viewHistory() {
         if (event.key === 'Enter') applyFilters();
       });
     }
-    if ($('#history-prev')) $('#history-prev').onclick = () => { page--; load(); };
-    if ($('#history-next')) $('#history-next').onclick = () => { page++; load(); };
+    const listUrl = (nextPage) => routeUrl('/history', {
+      q: filters.q,
+      person: filters.person,
+      source: filters.source,
+      from: filters.dateFrom,
+      to: filters.dateTo,
+      page: nextPage > 1 ? nextPage : '',
+    });
+    if ($('#history-prev')) $('#history-prev').onclick = () => navigateTo(listUrl(page - 1));
+    if ($('#history-next')) $('#history-next').onclick = () => navigateTo(listUrl(page + 1));
   };
   await load();
 }
@@ -1232,7 +1319,7 @@ async function viewHistoryEvent(id) {
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>修改记录详情</h1><p class="muted">查看本次操作涉及的全部商品与 Shopify 返回的库存状态变化。</p></div>
-      <a class="back-link" href="#/history">← 返回修改记录</a>
+      ${backLink('/history', '返回上一级')}
     </div>
     <div class="card event-overview">
       <div><span>Date</span><strong>${fmtDate(event.occurred_at)}</strong></div>
@@ -1241,7 +1328,7 @@ async function viewHistoryEvent(id) {
       <div><span>Reference</span><div>${referenceCell(event, shopHandle)}</div></div>
     </div>
     ${adjustment ? `<div class="card event-overview">
-      <div><span>Adjustment</span><strong><a class="item-link" href="#/adjustments/${adjustment.id}">${esc(adjustment.display_number || '查看调整单')}</a></strong></div>
+      <div><span>Adjustment</span><strong><a class="item-link" href="/adjustments/${adjustment.id}">${esc(adjustment.display_number || '查看调整单')}</a></strong></div>
       <div><span>Shopify account</span><strong>${esc(adjustment.login_account_name || '—')}</strong></div>
       <div><span>Recorded by</span><strong>${esc(adjustment.recorded_by_name || '—')}</strong></div>
       <div><span>Handled by</span><strong>${esc(adjustment.handled_by_names || '—')}</strong></div>
@@ -1256,7 +1343,7 @@ async function viewHistoryEvent(id) {
           const standardMissing = ['unavailable', 'committed', 'available', 'on_hand', 'incoming']
             .every((state) => row[`${state}_delta`] === null || row[`${state}_delta`] === undefined);
           return `<tr>
-          <td><a class="item-link" href="#/items/${row.item_id}">${productName(row)}</a>
+          <td><a class="item-link" href="/items/${row.item_id}">${productName(row)}</a>
             ${rawStateSummary(row)}
             ${standardMissing ? '<div class="missing-state-note">此工作流事件未返回表中 5 个标准状态；实际数量变化通常记录在同一操作的相邻事件。</div>' : ''}
           </td>
@@ -1305,23 +1392,29 @@ const variantLabel = (row) =>
   row.variant_title && row.variant_title !== 'Default Title' ? esc(row.variant_title) : '';
 const numOrDash = (v) => (v === null || v === undefined ? '—' : v);
 
-async function viewAdjustments() {
+async function viewAdjustments(params = routeParams()) {
   const options = await api('/adjustment-options');
-  let page = 1;
+  const page = pageNumber(params.get('page'));
+  const filters = {
+    q: params.get('q') || '',
+    status: params.get('status') || '',
+    reasonId: params.get('reasonId') || '',
+    staffId: params.get('staffId') || '',
+  };
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>库存调整</h1><p class="muted">建立可审核的 Draft，并在确认后写入 Shopify Available 库存。</p></div>
-      <div class="button-group"><a class="button secondary" href="#/virtual-stock">虚拟库存管理</a><button id="adjustments-export" class="secondary">导出 CSV</button><a class="button" href="#/adjustments/new">新建调整</a></div>
+      <div class="button-group"><a class="button secondary" href="/virtual-stock">虚拟库存管理</a><button id="adjustments-export" class="secondary">导出 CSV</button><a class="button" href="/adjustments/new">新建调整</a></div>
     </div>
     <div class="card">
       <div class="adjustment-filters">
-        <input id="adjustment-q" type="search" placeholder="搜索编号、Barcode、SKU 或商品…">
+        <input id="adjustment-q" type="search" value="${esc(filters.q)}" placeholder="搜索编号、Barcode、SKU 或商品…">
         <select id="adjustment-status"><option value="">全部状态</option>
-          <option value="draft">Draft</option><option value="applying">Submitting</option>
-          <option value="applied">Applied</option><option value="archived">Archived</option>
+          <option value="draft" ${filters.status === 'draft' ? 'selected' : ''}>Draft</option><option value="applying" ${filters.status === 'applying' ? 'selected' : ''}>Submitting</option>
+          <option value="applied" ${filters.status === 'applied' ? 'selected' : ''}>Applied</option><option value="archived" ${filters.status === 'archived' ? 'selected' : ''}>Archived</option>
         </select>
-        <select id="adjustment-reason"><option value="">全部原因</option>${options.reasons.map((reason) => `<option value="${reason.id}">${esc(reason.name)}</option>`).join('')}</select>
-        <select id="adjustment-staff"><option value="">全部员工</option>${options.staff.map((person) => `<option value="${person.id}">${esc(person.display_name)}</option>`).join('')}</select>
+        <select id="adjustment-reason"><option value="">全部原因</option>${options.reasons.map((reason) => `<option value="${reason.id}" ${filters.reasonId === String(reason.id) ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select>
+        <select id="adjustment-staff"><option value="">全部员工</option>${options.staff.map((person) => `<option value="${person.id}" ${filters.staffId === String(person.id) ? 'selected' : ''}>${esc(person.display_name)}</option>`).join('')}</select>
         <button id="adjustment-filter" class="secondary">应用</button>
       </div>
       <div id="adjustments-out">加载中…</div>
@@ -1390,7 +1483,7 @@ async function viewAdjustments() {
       </colgroup>
       <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th>商品</th><th>合计</th><th>日期</th><th>状态</th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
-        <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a></td>
+        <td class="col-no"><a class="item-link" href="/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a></td>
         <td class="col-note">${row.notes ? `<div class="note-main">${esc(row.notes)}</div>` : '<div class="note-main muted">（无备注）</div>'}<div class="muted xsmall">${esc(row.reason || '—')}</div>${row.apply_error ? `<div class="error xsmall">${esc(row.apply_error)}</div>` : ''}</td>
         <td class="col-person">${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted xsmall">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
         <td class="col-loc">${esc(row.locations || '—')}</td>
@@ -1403,10 +1496,19 @@ async function viewAdjustments() {
       <button id="adjustments-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${page} / ${pages} 页 · 共 ${result.total} 张</span>
       <button id="adjustments-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : `<span class="muted">共 ${result.total} 张</span>`;
-    if ($('#adjustments-prev')) $('#adjustments-prev').onclick = () => { page--; load(); };
-    if ($('#adjustments-next')) $('#adjustments-next').onclick = () => { page++; load(); };
+    const listUrl = (nextPage) => routeUrl('/adjustments', {
+      ...filters,
+      page: nextPage > 1 ? nextPage : '',
+    });
+    if ($('#adjustments-prev')) $('#adjustments-prev').onclick = () => navigateTo(listUrl(page - 1));
+    if ($('#adjustments-next')) $('#adjustments-next').onclick = () => navigateTo(listUrl(page + 1));
   };
-  const filter = () => { page = 1; load(); };
+  const filter = () => navigateTo(routeUrl('/adjustments', {
+    q: $('#adjustment-q').value.trim(),
+    status: $('#adjustment-status').value,
+    reasonId: $('#adjustment-reason').value,
+    staffId: $('#adjustment-staff').value,
+  }));
   $('#adjustment-filter').onclick = filter;
   $('#adjustment-status').onchange = filter;
   $('#adjustment-reason').onchange = filter;
@@ -1506,7 +1608,7 @@ async function viewAdjustmentForm(id = null) {
   ]);
   const adjustment = detail?.adjustment;
   if (adjustment && adjustment.status !== 'draft') {
-    location.hash = `#/adjustments/${id}`;
+    navigateTo(`/adjustments/${id}`, { replace: true });
     return;
   }
   let lines = (adjustment?.lines || []).map((line) => ({
@@ -1530,7 +1632,7 @@ async function viewAdjustmentForm(id = null) {
   const recordedIsCustom = Boolean(adjustment?.recorded_by && !adjustment.recorded_by.staff_id);
   app.innerHTML = `
     <div class="page-heading"><div><h1>${id ? `编辑 ${adjustmentNumber(adjustment.number, adjustment.display_number)}` : '新建库存调整'}</h1>
-      <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div><a class="back-link" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">← 返回</a></div>
+      <p class="muted">先保存 Draft；保存不会改变 Shopify 库存。</p></div>${backLink(id ? `/adjustments/${id}` : '/adjustments', '返回上一级')}</div>
     <div class="card adjustment-form">
       <div class="form-grid adjustment-basics">
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
@@ -1577,7 +1679,7 @@ async function viewAdjustmentForm(id = null) {
         <div class="picker-search"><input id="draft-item-search" type="search" placeholder="扫描或输入 Barcode / SKU / 商品"><button id="draft-item-find" class="secondary">搜索</button></div>
       </div>
       <div id="draft-search-results"></div>
-      <div class="form-actions"><a class="button secondary" href="${id ? `#/adjustments/${id}` : '#/adjustments'}">取消</a><button id="save-draft">保存 Draft</button></div>
+      <div class="form-actions"><a class="button secondary" href="${id ? `/adjustments/${id}` : '/adjustments'}" data-app-back>取消</a><button id="save-draft">保存 Draft</button></div>
     </div>`;
 
   const renderHandled = () => {
@@ -1839,10 +1941,10 @@ async function viewAdjustmentForm(id = null) {
       }
       if (uploadErrors.length) {
         alert(`Draft 已保存，但以下附件上传失败：\n${uploadErrors.join('\n')}`);
-        await viewAdjustmentForm(result.id);
+        navigateTo(`/adjustments/${result.id}/edit`, { replace: true });
         return;
       }
-      location.hash = `#/adjustments/${result.id}`;
+      navigateTo(`/adjustments/${result.id}`);
     } catch (error) { alert(`保存失败：${error.message}`); event.target.disabled = false; }
   };
   toggleRecordedCustom();
@@ -1859,8 +1961,8 @@ async function viewAdjustment(id) {
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
     <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
-      <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
-        ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
+      <div class="button-group">${backLink('/adjustments', '返回上一级')}
+        ${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}
         ${['draft', 'applied'].includes(adjustment.status) ? '<button id="archive-adjustment" class="secondary">归档</button>' : ''}
       </div></div>
@@ -1881,7 +1983,7 @@ async function viewAdjustment(id) {
         <colgroup><col><col class="w-variant"><col class="w-code"><col class="w-n"><col class="w-n"><col class="w-n"></colgroup>
         <thead><tr><th>商品</th><th>变体</th><th>Barcode / SKU</th><th>Before</th><th>Change</th><th>After</th></tr></thead>
         <tbody>${adjustment.lines.length ? adjustment.lines.map((line) => `<tr>
-          <td><a class="item-link" href="#/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">已删除</span>' : ''}</td>
+          <td><a class="item-link" href="/items/${line.item_id}">${esc(line.product_title || '(无标题)')}</a>${line.source === 'local' ? ' <span class="badge">已删除</span>' : ''}</td>
           <td>${variantLabel(line) || '<span class="muted">—</span>'}</td>
           <td><strong>${esc(line.barcode || '—')}</strong>${line.sku ? `<div class="muted small">${esc(line.sku)}</div>` : ''}</td>
           <td class="col-n">${numOrDash(line.qty_before)}</td><td class="col-n"><strong class="${line.delta > 0 ? 'pos' : 'neg'}">${signed(line.delta)}</strong></td>
@@ -1935,15 +2037,15 @@ async function viewSearch(query) {
   </section>`;
   app.innerHTML = `
     <div class="page-heading"><div><h1>搜索结果</h1><p class="muted">“${esc(term)}” 的商品、人员与操作记录。</p></div></div>
-    ${section('商品', result.products, (row) => `<a class="search-result-row" href="#/items/${row.id}">
+    ${section('商品', result.products, (row) => `<a class="search-result-row" href="/items/${row.id}">
       <div><span class="event-product-title">${productName(row)}</span>${codeMeta(row)}</div>
       <div>Available <strong>${row.available}</strong></div><span class="arrow">→</span>
     </a>`)}
-    ${section('库存调整', result.adjustments, (row) => `<a class="search-result-row" href="#/adjustments/${row.id}">
+    ${section('库存调整', result.adjustments, (row) => `<a class="search-result-row" href="/adjustments/${row.id}">
       <div><strong>${esc(adjustmentNumber(row.number, row.display_number))}</strong><div class="muted small">${esc(row.reason || '—')}</div></div>
       <div>${esc(row.recorded_by_name || row.login_account_name || '—')} · ${fmtDate(row.created_at)}</div><span class="arrow">→</span>
     </a>`)}
-    ${section('修改记录', result.history, (row) => `<a class="search-result-row" href="#/history/${row.id}">
+    ${section('修改记录', result.history, (row) => `<a class="search-result-row" href="/history/${row.id}">
       <div><strong>${esc(activityLabel(row.activity))}</strong><div class="muted small">${row.product_count === 1 ? productName(row) : `${row.product_count} 个商品变体`}</div></div>
       <div>${referenceCell(row, result.shopHandle)}<div class="muted small">${fmtDate(row.occurred_at)}</div></div><span class="arrow">→</span>
     </a>`)}
@@ -1957,37 +2059,70 @@ async function viewSearch(query) {
 async function route() {
   navGeneration++;
   clearMediaObjectUrls();
-  const hash = location.hash || '#/dashboard';
-  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', hash.startsWith(`#/${a.dataset.nav}`)));
+  const path = location.pathname === '/' ? '/dashboard' : location.pathname.replace(/\/$/, '');
+  const params = routeParams();
+  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', path.startsWith(`/${a.dataset.nav}`)));
+  const sectionTitle = path.startsWith('/items') ? '产品'
+    : path.startsWith('/history') ? '库存历史'
+      : path.startsWith('/adjustments') ? '手动调整'
+        : path.startsWith('/search') ? '搜索'
+          : path.startsWith('/system') ? '系统状态'
+            : path.startsWith('/virtual-stock') ? '虚拟库存'
+              : '首页';
+  document.title = `${sectionTitle} · Inventory`;
+  syncNavigationControls();
   try {
-    const m = hash.match(/^#\/items\/(\d+)/);
-    if (m) return await viewItem(m[1]);
-    const historyEvent = hash.match(/^#\/history\/(\d+)/);
+    const m = path.match(/^\/items\/(\d+)$/);
+    if (m) return await viewItem(m[1], params);
+    const historyEvent = path.match(/^\/history\/(\d+)$/);
     if (historyEvent) return await viewHistoryEvent(historyEvent[1]);
-    const adjustmentEdit = hash.match(/^#\/adjustments\/(\d+)\/edit$/);
+    const adjustmentEdit = path.match(/^\/adjustments\/(\d+)\/edit$/);
     if (adjustmentEdit) return await viewAdjustmentForm(adjustmentEdit[1]);
-    const adjustment = hash.match(/^#\/adjustments\/(\d+)$/);
+    const adjustment = path.match(/^\/adjustments\/(\d+)$/);
     if (adjustment) return await viewAdjustment(adjustment[1]);
-    if (hash === '#/adjustments/new') return await viewAdjustmentForm();
-    if (hash.startsWith('#/search')) {
-      const query = new URLSearchParams(hash.split('?')[1] || '').get('q') || '';
-      return await viewSearch(query);
-    }
-    if (hash.startsWith('#/virtual-stock')) return await viewVirtualStock();
-    if (hash.startsWith('#/local-items')) return await viewLocalItems();
-    if (hash.startsWith('#/items')) return await viewItems();
-    if (hash.startsWith('#/history')) return await viewHistory();
-    if (hash.startsWith('#/adjustments')) return await viewAdjustments();
-    if (hash.startsWith('#/system')) return await viewSystem();
-    return await viewDashboard();
+    if (path === '/adjustments/new') return await viewAdjustmentForm();
+    if (path === '/search') return await viewSearch(params.get('q') || '');
+    if (path === '/virtual-stock') return await viewVirtualStock(params);
+    if (path === '/local-items') return await viewLocalItems(params);
+    if (path === '/items') return await viewItems(params);
+    if (path === '/history') return await viewHistory(params);
+    if (path === '/adjustments') return await viewAdjustments(params);
+    if (path === '/system') return await viewSystem();
+    if (path === '/dashboard') return await viewDashboard(params);
+    navigateTo('/dashboard', { replace: true });
   } catch (e) {
     app.innerHTML = `<div class="card"><p class="error">${esc(e.message)}</p></div>`;
+  } finally {
+    syncNavigationControls();
   }
 }
+
+navigationController = window.InventoryNavigation.create();
+navigationController.initialize();
+
+document.addEventListener('click', (event) => {
+  if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+  const anchor = event.target.closest('a[href]');
+  if (!anchor || anchor.hasAttribute('download') || (anchor.target && anchor.target !== '_self')) return;
+  const url = new URL(anchor.href, location.href);
+  if (url.origin !== location.origin || !navigationController.isAppPath(url.pathname)) return;
+  event.preventDefault();
+  const target = `${url.pathname}${url.search}`;
+  if (anchor.hasAttribute('data-app-back')) {
+    const hasPreviousPage = navigationController.canGoBack();
+    navigationController.back(target);
+    if (!hasPreviousPage) route();
+    return;
+  }
+  navigateTo(target);
+}, true);
+
+$('#app-back').onclick = () => navigationController.back();
+$('#app-forward').onclick = () => navigationController.forward();
 $('#global-search').onsubmit = (event) => {
   event.preventDefault();
   const query = $('#global-search-input').value.trim();
-  if (query) location.hash = `#/search?q=${encodeURIComponent(query)}`;
+  if (query) navigateTo(routeUrl('/search', { q: query }));
 };
-window.addEventListener('hashchange', route);
+window.addEventListener('popstate', route);
 route();
