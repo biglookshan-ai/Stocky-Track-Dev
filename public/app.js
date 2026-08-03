@@ -5,6 +5,17 @@
 const $ = (sel) => document.querySelector(sel);
 const app = $('#app');
 
+// Navigation generation: every route change bumps it so async work started by a
+// previous view can bail out instead of writing into a DOM that no longer
+// exists. $w() is the write-safe selector — when the target is gone (the user
+// navigated away mid-request) it returns a detached node, so the stale write is
+// harmless instead of throwing "Cannot set properties of null", which used to
+// surface as an error page and made clicks feel unresponsive.
+let navGeneration = 0;
+const currentNav = () => navGeneration;
+const isCurrent = (gen) => gen === navGeneration;
+const $w = (sel) => $(sel) || document.createElement('div');
+
 const sessionClient = window.InventorySessionClient.create({
   getToken: async () => {
     try { return await window.shopify.idToken(); }
@@ -392,7 +403,7 @@ async function viewDashboard() {
     <div class="notice"><strong>历史范围说明：</strong>Shopify 商品 Adjustment history 页面提供最近 180 天。本应用会永久保存已经采集或导入的记录；要补齐更早的 Stocky 历史，需要后续导入 Stocky 导出文件。</div>`;
   let recentPage = 1;
   const renderRecent = (result) => {
-    $('#recent-products-body').innerHTML = result.rows.map((row) => `<tr>
+    $w('#recent-products-body').innerHTML = result.rows.map((row) => `<tr>
       <td><a class="item-link" href="#/items/${row.id}">${productName(row)}</a>${codeMeta(row)}</td>
       <td>${esc(activityLabel(row.activity))}<div>${srcBadge(row.source_type)}</div></td>
       <td>${actorCell(row)}</td><td>${esc(row.locations)}</td>
@@ -400,7 +411,7 @@ async function viewDashboard() {
       <td>${esc(lastInventoryChange(row))}<div class="muted small">${fmtDate(row.occurred_at)}</div></td>
     </tr>`).join('') || '<tr><td colspan="6" class="muted">最近 3 天没有库存修改</td></tr>';
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
-    $('#recent-products-pagination').innerHTML = result.total > result.pageSize ? `
+    $w('#recent-products-pagination').innerHTML = result.total > result.pageSize ? `
       <button id="recent-prev" class="secondary" ${recentPage <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${recentPage} / ${pages} 页 · 每页 10 个商品</span>
       <button id="recent-next" class="secondary" ${recentPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
@@ -467,28 +478,28 @@ async function viewDashboard() {
   });
   $('#btn-stocky-dry').onclick = guard(async (e) => {
     const text = await readStockyFile();
-    $('#stocky-report').innerHTML = '预检中…';
+    $w('#stocky-report').innerHTML = '预检中…';
     const { report } = await api('/import/stocky?mode=dry-run', {
       method: 'POST', body: text, headers: { 'Content-Type': 'text/csv' },
     });
-    $('#stocky-report').innerHTML = stockyReport(report);
+    $w('#stocky-report').innerHTML = stockyReport(report);
     $('#btn-stocky-commit').disabled = false;
     e.target.disabled = false;
   });
   $('#btn-stocky-commit').onclick = guard(async (e) => {
     if (!confirm('确认把预检通过的 Stocky 历史调整写入账本？（幂等，可重复执行）')) { e.target.disabled = false; return; }
     const text = await readStockyFile();
-    $('#stocky-report').innerHTML = '导入中…（几十秒）';
+    $w('#stocky-report').innerHTML = '导入中…（几十秒）';
     const result = await api('/import/stocky?mode=commit', {
       method: 'POST', body: text, headers: { 'Content-Type': 'text/csv' },
     });
-    $('#stocky-report').innerHTML = stockyReport(result.report, result);
+    $w('#stocky-report').innerHTML = stockyReport(result.report, result);
   });
   $('#btn-stocky-undo').onclick = guard(async (e) => {
     if (!confirm('撤销 Stocky 导入？将删除所有 STK 调整单和导入的历史记录，并把回填的操作人/备注清回原样。此操作可逆——之后可重新导入。')) { e.target.disabled = false; return; }
-    $('#stocky-report').innerHTML = '撤销中…';
+    $w('#stocky-report').innerHTML = '撤销中…';
     const r = await api('/import/stocky/undo', { method: 'POST' });
-    $('#stocky-report').innerHTML = `<div class="notice">✅ 已撤销：删除 ${r.deletedAdjustments} 张 STK 单、${r.deletedEvents} 个历史事件、${r.deletedLedgerRows} 行明细；回退 ${r.revertedBackfillRows} 行回填；删除 ${r.deletedLocalItems} 个本地商品。可重新导入。</div>`;
+    $w('#stocky-report').innerHTML = `<div class="notice">✅ 已撤销：删除 ${r.deletedAdjustments} 张 STK 单、${r.deletedEvents} 个历史事件、${r.deletedLedgerRows} 行明细；回退 ${r.revertedBackfillRows} 行回填；删除 ${r.deletedLocalItems} 个本地商品。可重新导入。</div>`;
     e.target.disabled = false;
   });
 }
@@ -548,7 +559,7 @@ async function viewItems() {
       <div id="items-pagination" class="pagination"></div>
     </div>`;
   const run = async () => {
-    $('#items-out').innerHTML = '加载中…';
+    $w('#items-out').innerHTML = '加载中…';
     try {
       const params = new URLSearchParams({
         q: $('#q').value,
@@ -561,7 +572,7 @@ async function viewItems() {
       const result = await api(`/items?${params}`);
       const { rows } = result;
       $('#items-summary').textContent = `共 ${result.total} 个商品变体`;
-      $('#items-out').innerHTML = rows.length ? `
+      $w('#items-out').innerHTML = rows.length ? `
         <div class="table-scroll"><table class="items-table"><thead><tr><th>商品</th><th class="num">Unavailable</th><th class="num">Committed</th><th class="num">Available</th><th class="num">On hand</th><th class="num">Incoming</th><th>最近库存修改</th><th>最近修改时间</th></tr></thead>
         <tbody>${rows.map((r) => `<tr>
           <td><a class="item-link" href="#/items/${r.id}">${productName(r)}</a>${r.source === 'local' ? ' <span class="badge">已删除</span>' : ''}${codeMeta(r)}</td>
@@ -573,13 +584,13 @@ async function viewItems() {
           <td>${r.last_changed_at ? esc(lastInventoryChange(r)) : '<span class="muted">暂无记录</span>'}<div class="muted small">${r.last_activity ? esc(activityLabel(r.last_activity)) : ''}</div></td>
           <td>${fmtDate(r.last_changed_at)}</td></tr>`).join('')}</tbody></table></div>` : '无结果。';
       const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
-      $('#items-pagination').innerHTML = result.total > result.pageSize ? `
+      $w('#items-pagination').innerHTML = result.total > result.pageSize ? `
         <button id="items-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
         <span>第 ${page} / ${pages} 页</span>
         <button id="items-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : '';
       if ($('#items-prev')) $('#items-prev').onclick = () => { page--; run(); };
       if ($('#items-next')) $('#items-next').onclick = () => { page++; run(); };
-    } catch (e) { $('#items-out').innerHTML = `<p class="error">${esc(e.message)}</p>`; }
+    } catch (e) { $w('#items-out').innerHTML = `<p class="error">${esc(e.message)}</p>`; }
   };
   const resetAndRun = () => { page = 1; run(); };
   $('#btn-search').onclick = resetAndRun;
@@ -959,14 +970,14 @@ async function viewItem(id) {
       range: $('#trend-range').value,
     });
     if ($('#trend-location').value) params.set('location', $('#trend-location').value);
-    $('#inventory-trend').innerHTML = '<div class="trend-loading">正在读取库存趋势…</div>';
+    $w('#inventory-trend').innerHTML = '<div class="trend-loading">正在读取库存趋势…</div>';
     try {
       const result = await api(`/items/${id}/trend?${params}`);
       if (request !== trendRequest) return;
-      $('#inventory-trend').innerHTML = inventoryTrendChart(result);
+      $w('#inventory-trend').innerHTML = inventoryTrendChart(result);
       wireTrendChart();
     } catch (error) {
-      if (request === trendRequest) $('#inventory-trend').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
+      if (request === trendRequest) $w('#inventory-trend').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
     }
   };
   $('#trend-state').onchange = loadTrend;
@@ -981,20 +992,20 @@ async function viewItem(id) {
       page: String(salesPage),
       limit: '20',
     });
-    $('#sales-history').innerHTML = '<div class="trend-loading">正在计算销售历史…</div>';
-    $('#sales-pagination').innerHTML = '';
+    $w('#sales-history').innerHTML = '<div class="trend-loading">正在计算销售历史…</div>';
+    $w('#sales-pagination').innerHTML = '';
     try {
       const result = await api(`/items/${id}/sales?${params}`);
-      $('#sales-history').innerHTML = renderSalesHistory(result);
+      $w('#sales-history').innerHTML = renderSalesHistory(result);
       const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
-      $('#sales-pagination').innerHTML = result.total > result.pageSize ? `
+      $w('#sales-pagination').innerHTML = result.total > result.pageSize ? `
         <button id="sales-prev" class="secondary" ${salesPage <= 1 ? 'disabled' : ''}>上一页</button>
         <span>第 ${salesPage} / ${pages} 页</span>
         <button id="sales-next" class="secondary" ${salesPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
       if ($('#sales-prev')) $('#sales-prev').onclick = () => { salesPage--; loadSales(); };
       if ($('#sales-next')) $('#sales-next').onclick = () => { salesPage++; loadSales(); };
     } catch (error) {
-      $('#sales-history').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
+      $w('#sales-history').innerHTML = `<div class="trend-empty error">${esc(error.message)}</div>`;
     }
   };
   $('#sales-range').onchange = () => { salesPage = 1; loadSales(); };
@@ -1003,14 +1014,14 @@ async function viewItem(id) {
   const loadHistory = async () => {
     const location = $('#history-location').value;
     const suffix = location ? `&location=${encodeURIComponent(location)}` : '';
-    $('#all-history').innerHTML = '加载中…';
+    $w('#all-history').innerHTML = '加载中…';
     const historical = await api(`/items/${id}/history?page=${historyPage}&limit=25${suffix}`);
-    $('#all-history').innerHTML = historyTable(historical.rows, shopHandle, '该仓位暂无历史修改记录');
+    $w('#all-history').innerHTML = historyTable(historical.rows, shopHandle, '该仓位暂无历史修改记录');
     $('#history-range').textContent = historical.first
       ? `共 ${historical.total} 条 · ${fmtDate(historical.first)} 至 ${fmtDate(historical.last)}`
       : '暂无已保存的修改记录';
     const pages = Math.max(1, Math.ceil(historical.total / historical.pageSize));
-    $('#history-pagination').innerHTML = historical.total > historical.pageSize ? `
+    $w('#history-pagination').innerHTML = historical.total > historical.pageSize ? `
       <button id="history-prev" class="secondary" ${historyPage <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${historyPage} / ${pages} 页</span>
       <button id="history-next" class="secondary" ${historyPage >= pages ? 'disabled' : ''}>下一页</button>` : '';
@@ -1251,7 +1262,7 @@ async function viewAdjustments() {
             <span></span><span></span>
             <button id="add-staff" class="secondary small-button">添加</button>
           </div>
-          <div class="section-heading account-section"><div><h2>Shopify 登录账号</h2><p class="muted compact">系统自动识别，仅用于记录「这张单由哪个 Shopify 账号提交」。可改成邮箱等易读名称；不参与员工选择，也不能删除。</p></div></div>
+          <div class="section-heading account-section"><div><h2>Shopify 登录账号</h2><p class="muted compact">系统自动识别账号 ID。Shopify 不向非 Plus 商店的 App 提供账号邮箱（需 Plus 专属的 read_users 权限），所以请在此手动改成邮箱等易读名称——只需改一次，之后所有记录都会显示这个名称。不参与员工选择，也不能删除。</p></div></div>
           <div class="staff-list">${(options.accounts || []).map((acct) => `<div class="setting-row">
             <input type="text" value="${esc(acct.display_name)}" data-staff-name="${acct.id}" aria-label="账号名称">
             <span class="muted small">ID ${esc(acct.shopify_user_id || '')}</span>
@@ -1269,12 +1280,12 @@ async function viewAdjustments() {
     staffId: $('#adjustment-staff').value,
   });
   const load = async () => {
-    $('#adjustments-out').innerHTML = '加载中…';
+    $w('#adjustments-out').innerHTML = '加载中…';
     const params = query();
     params.set('page', page);
     params.set('limit', '25');
     const result = await api(`/adjustments?${params}`);
-    $('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
+    $w('#adjustments-out').innerHTML = `<div class="table-scroll"><table class="adjustments-table">
       <thead><tr><th>调整单</th><th>原因 / 备注</th><th>操作人</th><th>仓位</th><th class="num">商品数</th><th class="num">合计</th><th>日期</th><th>状态</th><th></th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
         <td><a class="item-link" href="#/adjustments/${row.id}">${adjustmentNumber(row.number, row.display_number)}</a> ${stockyTag(row.display_number)}</td>
@@ -1286,7 +1297,7 @@ async function viewAdjustments() {
         <td>${adjustmentStatus(row.status)}</td><td><a class="row-arrow" href="#/adjustments/${row.id}" aria-label="查看">→</a></td>
       </tr>`).join('') || '<tr><td colspan="9" class="muted">暂无库存调整</td></tr>'}</tbody></table></div>`;
     const pages = Math.max(1, Math.ceil(result.total / result.pageSize));
-    $('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
+    $w('#adjustments-pagination').innerHTML = result.total > result.pageSize ? `
       <button id="adjustments-prev" class="secondary" ${page <= 1 ? 'disabled' : ''}>上一页</button>
       <span>第 ${page} / ${pages} 页 · 共 ${result.total} 张</span>
       <button id="adjustments-next" class="secondary" ${page >= pages ? 'disabled' : ''}>下一页</button>` : `<span class="muted">共 ${result.total} 张</span>`;
@@ -1465,7 +1476,7 @@ async function viewAdjustmentForm(id = null) {
     </div>`;
 
   const renderHandled = () => {
-    $('#handled-chips').innerHTML = handledBy.length
+    $w('#handled-chips').innerHTML = handledBy.length
       ? `<div class="participant-chips">${handledBy.map((person, index) => `<span class="participant-chip">${esc(person.name)}<button type="button" data-remove-handled="${index}" aria-label="移除">×</button></span>`).join('')}</div>`
       : '<div class="muted small">尚未添加经手员工。</div>';
     document.querySelectorAll('[data-remove-handled]').forEach((button) => {
@@ -1512,7 +1523,7 @@ async function viewAdjustmentForm(id = null) {
     else line.delta = Number(line.delta) < 0 ? -magnitude : magnitude;
   };
   const renderPendingFiles = () => {
-    $('#pending-attachments').innerHTML = pendingFiles.length
+    $w('#pending-attachments').innerHTML = pendingFiles.length
       ? `<div class="pending-files">${pendingFiles.map((file, index) => `<span>${esc(file.name)} · ${formatBytes(file.size)} <button class="pending-file-remove" data-pending-remove="${index}" aria-label="移除附件">×</button></span>`).join('')}</div>`
       : '';
     document.querySelectorAll('[data-pending-remove]').forEach((button) => {
@@ -1522,7 +1533,7 @@ async function viewAdjustmentForm(id = null) {
   const renderLines = () => {
     lines.forEach(normalizeLineDirection);
     const direction = selectedDirection();
-    $('#draft-lines').innerHTML = lines.length ? `<div class="table-scroll"><table class="adjustment-lines">
+    $w('#draft-lines').innerHTML = lines.length ? `<div class="table-scroll"><table class="adjustment-lines">
       <thead><tr><th>商品</th><th class="num">Before</th><th class="num">Change (+ / −)</th><th class="num">After</th><th></th></tr></thead>
       <tbody>${lines.map((line, index) => `<tr>
         <td><span class="event-product-title">${productName(line)}</span>${codeMeta(line)}</td>
@@ -1570,7 +1581,7 @@ async function viewAdjustmentForm(id = null) {
       lines.push({ itemId: row.id, ...row, available: Number(row.available), delta });
       added++;
     }
-    $('#draft-search-results').innerHTML = '';
+    $w('#draft-search-results').innerHTML = '';
     $('#draft-item-search').value = '';
     $('#draft-item-search').focus();
     renderLines();
@@ -1579,12 +1590,12 @@ async function viewAdjustmentForm(id = null) {
   const findItems = async () => {
     const term = $('#draft-item-search').value.trim();
     if (!term) return;
-    $('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
+    $w('#draft-search-results').innerHTML = '<p class="muted">搜索中…</p>';
     try {
       const result = await api(`/adjustment-items?locationId=${encodeURIComponent($('#draft-location').value)}&q=${encodeURIComponent(term)}`);
-      $('#draft-search-results').innerHTML = '';
+      $w('#draft-search-results').innerHTML = '';
       if (!result.rows.length) {
-        $('#draft-search-results').innerHTML = '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
+        $w('#draft-search-results').innerHTML = '<p class="muted">该仓位没有匹配且可调整的商品。</p>';
         return;
       }
       // Barcode/SKU scan → add straight away, no dialog.
@@ -1594,7 +1605,7 @@ async function viewAdjustmentForm(id = null) {
         return;
       }
       openPicker(result.rows, term);
-    } catch (error) { $('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
+    } catch (error) { $w('#draft-search-results').innerHTML = `<p class="error">${esc(error.message)}</p>`; }
   };
 
   // Modal picker so results never push the page around. Items already in the
@@ -1684,7 +1695,7 @@ async function viewAdjustmentForm(id = null) {
   $('#draft-location').onchange = () => {
     if (!lines.length || confirm('更改仓位会清空当前调整明细，是否继续？')) {
       lines = [];
-      $('#draft-search-results').innerHTML = '';
+      $w('#draft-search-results').innerHTML = '';
       renderLines();
     } else {
       $('#draft-location').value = String(adjustment?.lines?.[0]?.location_id || options.locations[0]?.id || '');
@@ -1838,6 +1849,7 @@ async function viewSearch(query) {
 
 // ---- router ----
 async function route() {
+  navGeneration++;
   clearMediaObjectUrls();
   const hash = location.hash || '#/dashboard';
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', hash.startsWith(`#/${a.dataset.nav}`)));
