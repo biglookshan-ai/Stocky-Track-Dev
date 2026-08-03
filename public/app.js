@@ -661,17 +661,37 @@ const inventoryMatrix = (levels) => {
     ['Damaged', level.damaged], ['Safety stock', level.safety_stock],
     ['Quality control', level.quality_control],
   ].filter(([, v]) => v !== null && v !== undefined && Number(v) !== 0);
-  const rows = levels.map((level) => {
+  // Each row keeps a one-line, human summary of what that warehouse's numbers
+  // mean (short stock / incoming / in sync) plus any non-zero unavailable
+  // breakdown — the useful part of the old per-warehouse cards, without
+  // repeating the column headings.
+  const locSummary = (level) => {
+    const available = level.available === null ? null : Number(level.available);
+    const incoming = Number(level.incoming || 0);
+    const parts = [];
+    if (available !== null && available < 0) parts.push(`<span class="loc-status danger">库存不足 ${Math.abs(available)} 件</span>`);
+    else if (available !== null && available > 0) parts.push(`<span class="loc-status ok">可售 ${available} 件</span>`);
+    if (incoming > 0) parts.push(`<span class="loc-status incoming">${incoming} 件在途</span>`);
     const extra = breakdown(level);
-    return `<tr>
-      <th scope="row">${esc(level.name)}${extra.length ? `<div class="muted xsmall">${extra.map(([n, v]) => `${n} ${esc(v)}`).join(' · ')}</div>` : ''}</th>
+    if (extra.length) parts.push(`<span class="loc-status ok">${extra.map(([n, v]) => `${n} ${esc(v)}`).join(' · ')}</span>`);
+    if (!parts.length) parts.push('<span class="loc-status ok">无库存</span>');
+    return parts.join('');
+  };
+  const rows = levels.map((level) => `<tr>
+      <th scope="row">${esc(level.name)}${locSummary(level)}</th>
       ${INVENTORY_STATE_COLUMNS.map(([key]) => stateCell(level[key], key)).join('')}
-    </tr>`;
-  }).join('');
+    </tr>`).join('');
+  const totalAvailable = totals.available === null ? null : Number(totals.available);
+  const totalIncoming = Number(totals.incoming || 0);
+  const totalSummary = [
+    totalAvailable !== null && totalAvailable < 0 ? `<span class="loc-status danger">缺货 ${Math.abs(totalAvailable)} 件</span>`
+      : totalAvailable ? `<span class="loc-status ok">可售 ${totalAvailable} 件</span>` : '<span class="loc-status ok">无可售库存</span>',
+    totalIncoming > 0 ? `<span class="loc-status incoming">${totalIncoming} 件在途</span>` : '',
+  ].filter(Boolean).join('');
   return `<div class="table-scroll"><table class="inventory-matrix">
     <thead><tr><th>仓位</th>${INVENTORY_STATE_COLUMNS.map(([key, label]) => `<th>${label}${key === 'unavailable' ? ` ${infoTip('由 On hand − Available 计算，是不可售库存总量；Committed 等状态包含在其中，不应与其再次相加。')}` : ''}</th>`).join('')}</tr></thead>
     <tbody>
-      <tr class="total-row"><th scope="row">全部仓位合计</th>${INVENTORY_STATE_COLUMNS.map(([key]) => stateCell(totals[key], key)).join('')}</tr>
+      <tr class="total-row"><th scope="row">全部仓位合计${totalSummary}</th>${INVENTORY_STATE_COLUMNS.map(([key]) => stateCell(totals[key], key)).join('')}</tr>
       ${rows}
     </tbody>
   </table></div>`;
