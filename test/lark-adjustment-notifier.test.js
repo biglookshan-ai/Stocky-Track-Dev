@@ -48,7 +48,9 @@ test('builds a complete adjustment notification', () => {
   assert.equal(messages[0].msg_type, 'interactive');
   assert.equal(messages[0].card.header.template, 'green');
   assert.equal(messages[0].card.header.title.content, '✅ 库存调整已执行 · A0042');
-  assert.match(combined, /\*\*原因：\*\* Manual adjustment.*\*\*备注：\*\* 客人取消订单/);
+  assert.match(combined, /\*\*原因：\*\* Manual adjustment/);
+  assert.match(combined, /\*\*备注：\*\*/);
+  assert.match(combined, /客人取消订单，手动增加库存/);
   assert.match(combined, /\*\*调整明细：\*\*/);
   assert.match(combined, /\*\*记录员工：\*\* Kay/);
   assert.match(combined, /\*\*经手员工：\*\* Chill、Shan/);
@@ -64,8 +66,28 @@ test('builds a complete adjustment notification', () => {
 test('indents every continuation line in a multi-line note', () => {
   const adjustment = sampleAdjustment(1);
   adjustment.notes = '第一行\n第二行\n第三行';
-  const combined = JSON.stringify(buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' }));
-  assert.match(combined, /\*\*备注：\*\* 第一行\\n　　　　第二行\\n　　　　第三行/);
+  const [message] = buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' });
+  const note = message.card.elements.find((element) =>
+    element.tag === 'column_set'
+      && element.columns[0].elements[0].text.content === '**备注：**');
+  assert.ok(note);
+  assert.equal(note.columns[0].width, 'auto');
+  assert.equal(note.columns[1].width, 'weighted');
+  assert.equal(note.columns[1].elements[0].text.content, '第一行\n第二行\n第三行');
+});
+
+test('keeps wrapped product titles and details in one aligned content column', () => {
+  const adjustment = sampleAdjustment(1);
+  adjustment.lines[0].product_title = 'A very long product title that may wrap onto several lines';
+  const [message] = buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' });
+  const product = message.card.elements.find((element) =>
+    element.tag === 'column_set'
+      && element.columns[0].elements[0].text.content === '1.');
+  assert.ok(product);
+  assert.equal(product.columns[0].width, 'auto');
+  assert.equal(product.columns[1].width, 'weighted');
+  assert.match(product.columns[1].elements[0].text.content,
+    /^\*\*A very long product title.*\*\*\nBarcode：/);
 });
 
 test('Lark notification is enabled by default and only skips explicit false', () => {

@@ -26,11 +26,6 @@ function markdown(value, fallback = '—') {
     .replace(/([\\`*_[\]~])/g, '\\$1');
 }
 
-function multilineFieldMarkdown(label, value) {
-  const content = markdown(value).replace(/\r\n?/g, '\n');
-  return `**${label}：** ${content.replace(/\n/g, '\n　　　　')}`;
-}
-
 export function shouldNotifyAdjustment(input) {
   return input?.notifyLark !== false;
 }
@@ -91,12 +86,45 @@ function barcodeMarkdown(adjustment, line, configuredShop) {
   return adminUrl && line.barcode ? `[${barcode}](${adminUrl})` : barcode;
 }
 
-function adjustmentLineMarkdown(adjustment, line, index, configuredShop) {
-  return [
-    `${index}. **${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
-    `   Barcode：${barcodeMarkdown(adjustment, line, configuredShop)} | SKU：${markdown(line.sku)}`,
-    `   ${markdown(line.location)} | Change：${changeMarkdown(line.delta)} · Before：**${quantity(line.qty_before)}** · After：**${quantity(line.qty_after)}**`,
+function markdownElement(content) {
+  return { tag: 'div', text: { tag: 'lark_md', content } };
+}
+
+// Lark collapses Markdown whitespace and wrapped lines return to the outer
+// element's left edge. Keep labels/numbers in their own auto-width column so
+// every explicit or automatic continuation stays aligned in the content column.
+function alignedColumns(label, content) {
+  return {
+    tag: 'column_set',
+    flex_mode: 'none',
+    columns: [
+      {
+        tag: 'column',
+        width: 'auto',
+        vertical_align: 'top',
+        elements: [markdownElement(label)],
+      },
+      {
+        tag: 'column',
+        width: 'weighted',
+        weight: 1,
+        vertical_align: 'top',
+        elements: [markdownElement(content)],
+      },
+    ],
+  };
+}
+
+function adjustmentLineBlock(adjustment, line, index, configuredShop) {
+  const content = [
+    `**${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
+    `Barcode：${barcodeMarkdown(adjustment, line, configuredShop)} | SKU：${markdown(line.sku)}`,
+    `${markdown(line.location)} | Change：${changeMarkdown(line.delta)} · Before：**${quantity(line.qty_before)}** · After：**${quantity(line.qty_after)}**`,
   ].join('\n');
+  return {
+    charCount: content.length + String(index).length + 2,
+    elements: [alignedColumns(`${index}.`, content)],
+  };
 }
 
 function splitLongSection(section, limit) {
@@ -114,21 +142,22 @@ function splitLongSection(section, limit) {
   return parts;
 }
 
-function packSections(sections, limit) {
-  const pieces = sections.flatMap((section) => splitLongSection(section, limit));
+function packElementBlocks(blocks, limit) {
   const pages = [];
-  let current = '';
-  for (const piece of pieces) {
-    const candidate = current ? `${current}\n\n${piece}` : piece;
-    if (current && candidate.length > limit) {
-      pages.push(current);
-      current = piece;
-    } else {
-      current = candidate;
+  let elements = [];
+  let charCount = 0;
+  for (const block of blocks) {
+    const separatorCost = elements.length ? 2 : 0;
+    if (elements.length && charCount + separatorCost + block.charCount > limit) {
+      pages.push(elements);
+      elements = [];
+      charCount = 0;
     }
+    elements.push(...block.elements);
+    charCount += (elements.length > block.elements.length ? separatorCost : 0) + block.charCount;
   }
-  if (current) pages.push(current);
-  return pages.length ? pages : [''];
+  if (elements.length) pages.push(elements);
+  return pages.length ? pages : [[markdownElement('')]];
 }
 
 function detailUrl(adjustment, appUrl) {
@@ -147,22 +176,30 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const handledBy = markdown(adjustment.handled_by?.map((person) => person.name).filter(Boolean).join('、'));
   const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
 
-  const sections = [
-    [`**原因：** ${markdown(adjustment.reason)}`, multilineFieldMarkdown('备注', adjustment.notes)].join('\n'),
-    lines.length
-      ? `**调整明细：**\n${adjustmentLineMarkdown(adjustment, lines[0], 1, configuredShop)}`
-      : '**调整明细：** —',
-    ...lines.slice(1).map((line, index) =>
-      adjustmentLineMarkdown(adjustment, line, index + 2, configuredShop)),
-    [
-      `**记录员工：** ${recordedBy}`,
-      `**经手员工：** ${handledBy}`,
-      `**调整时间：** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}`,
-    ].join('\n'),
+  const note = markdown(adjustment.notes).replace(/\r\n?/g, '\n');
+  const noteChunks = splitLongSection(note, Math.max(500, maxChars - 100));
+  const detailHeading = lines.length ? '**调整明细：**' : '**调整明细：** —';
+  const footer = [
+    `**记录员工：** ${recordedBy}`,
+    `**经手员工：** ${handledBy}`,
+    `**调整时间：** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}`,
+  ].join('\n');
+  const blocks = [
+    {
+      charCount: markdown(adjustment.reason).length + 6,
+      elements: [markdownElement(`**原因：** ${markdown(adjustment.reason)}`)],
+    },
+    ...noteChunks.map((chunk) => ({
+      charCount: chunk.length + 6,
+      elements: [alignedColumns('**备注：**', chunk)],
+    })),
+    { charCount: detailHeading.length, elements: [markdownElement(detailHeading)] },
+    ...lines.map((line, index) => adjustmentLineBlock(adjustment, line, index + 1, configuredShop)),
+    { charCount: footer.length, elements: [markdownElement(footer)] },
   ];
 
-  const pages = packSections(sections, maxChars);
-  return pages.map((page, index) => ({
+  const pages = packElementBlocks(blocks, maxChars);
+  return pages.map((pageElements, index) => ({
     msg_type: 'interactive',
     card: {
       config: { wide_screen_mode: true },
@@ -174,7 +211,7 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
         },
       },
       elements: [
-        { tag: 'div', text: { tag: 'lark_md', content: page } },
+        ...pageElements,
         ...(url && index === pages.length - 1 ? [{
           tag: 'action',
           actions: [{
