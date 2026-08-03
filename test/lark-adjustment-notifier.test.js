@@ -31,6 +31,8 @@ function sampleAdjustment(lineCount = 2) {
       vendor: 'CGP',
       barcode: `5000${index}`,
       sku: `SKU-${index}`,
+      shopify_product_gid: `gid://shopify/Product/${15762296209786 + index}`,
+      shopify_variant_gid: `gid://shopify/ProductVariant/${57102666269050 + index}`,
       location: 'CineGearPro Shop',
       qty_before: index,
       delta: index % 2 ? -1 : 2,
@@ -40,21 +42,30 @@ function sampleAdjustment(lineCount = 2) {
 }
 
 test('builds a complete adjustment notification', () => {
-  const messages = buildAdjustmentNotificationMessages(sampleAdjustment());
+  const messages = buildAdjustmentNotificationMessages(sampleAdjustment(), { timeZone: 'UTC' });
   const combined = JSON.stringify(messages);
   assert.equal(messages[0].msg_type, 'interactive');
   assert.equal(messages[0].card.header.template, 'green');
   assert.equal(messages[0].card.header.title.content, '✅ 库存调整已执行 · A0042');
-  assert.match(combined, /\*\*备注：\*\* 客人取消订单/);
+  assert.match(combined, /\*\*原因：\*\* Manual adjustment.*\*\*备注：\*\* 客人取消订单/);
   assert.match(combined, /\*\*调整明细：\*\*/);
   assert.match(combined, /\*\*记录员工：\*\* Kay/);
   assert.match(combined, /\*\*经手员工：\*\* Chill、Shan/);
   assert.match(combined, /Product 1 \/ Variant 1/);
-  assert.match(combined, /Barcode：50000 \| SKU：SKU-0/);
+  assert.match(combined, /Barcode：\[50000\]\(https:\/\/admin\.shopify\.com\/store\/test\/products\/15762296209786\/variants\/57102666269050\) \| SKU：SKU-0/);
   assert.match(combined, /Before：\*\*0\*\* · Change：<font color='green'>\*\*\+2\*\*<\/font> · After：\*\*2\*\*/);
   assert.match(combined, /<font color='red'>\*\*-1\*\*<\/font>/);
+  assert.match(combined, /\*\*调整时间：\*\* 2026\/08\/03 11:00:00/);
   assert.equal(messages.at(-1).card.elements.at(-1).actions[0].url,
     'https://admin.shopify.com/store/test/apps/inventory/adjustments/42');
+});
+
+test('keeps barcode as plain text when Shopify product identity is missing', () => {
+  const adjustment = sampleAdjustment(1);
+  adjustment.lines[0].shopify_product_gid = null;
+  const combined = JSON.stringify(buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' }));
+  assert.match(combined, /Barcode：50000 \| SKU：SKU-0/);
+  assert.doesNotMatch(combined, /\/products\/15762296209786\/variants\//);
 });
 
 test('splits long adjustments without dropping products', () => {

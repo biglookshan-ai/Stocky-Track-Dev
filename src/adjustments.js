@@ -389,7 +389,8 @@ export async function getAdjustment(id) {
        LEFT JOIN staff applied ON applied.id=a.applied_by_staff_id
        WHERE a.id=$1`, [adjustmentId]),
     q(`SELECT al.*, i.product_title, i.variant_title, i.barcode, i.sku, i.vendor,
-              i.source, i.shopify_inventory_item_gid, l.name AS location,
+              i.source, i.shopify_product_gid, i.shopify_variant_gid,
+              i.shopify_inventory_item_gid, l.name AS location,
               l.shopify_gid AS shopify_location_gid,
               cl.available AS current_available
        FROM adjustment_lines al

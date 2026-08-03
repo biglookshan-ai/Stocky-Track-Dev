@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { q, withLock } from './db.js';
 
 const DEFAULT_MAX_MESSAGE_CHARS = 7000;
+const DEFAULT_TIME_ZONE = 'Europe/London';
 
 function text(value, fallback = '—') {
   const normalized = String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
@@ -36,6 +37,57 @@ function changeMarkdown(value) {
   const amount = signed(value);
   const color = Number(value) > 0 ? 'green' : Number(value) < 0 ? 'red' : 'grey';
   return `<font color='${color}'>**${amount}**</font>`;
+}
+
+function formatAdjustmentTime(value, timeZone) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return markdown(value);
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}/${parts.month}/${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function shopifyId(gid, resource) {
+  const match = String(gid || '').match(new RegExp(`^gid://shopify/${resource}/(\\d+)$`, 'i'));
+  return match?.[1] || '';
+}
+
+function shopHandle(adjustment, configuredShop) {
+  const referenceMatch = String(adjustment.reference_document_uri || '')
+    .match(/^https:\/\/admin\.shopify\.com\/store\/([^/?#]+)/i);
+  if (referenceMatch) return referenceMatch[1];
+  return String(configuredShop || '').replace(/\.myshopify\.com$/i, '').trim();
+}
+
+function variantAdminUrl(adjustment, line, configuredShop) {
+  const handle = shopHandle(adjustment, configuredShop);
+  const productId = shopifyId(line.shopify_product_gid, 'Product');
+  const variantId = shopifyId(line.shopify_variant_gid, 'ProductVariant');
+  if (!handle || !productId || !variantId) return '';
+  return `https://admin.shopify.com/store/${encodeURIComponent(decodeURIComponent(handle))}/products/${productId}/variants/${variantId}`;
+}
+
+function barcodeMarkdown(adjustment, line, configuredShop) {
+  const barcode = markdown(line.barcode);
+  const adminUrl = variantAdminUrl(adjustment, line, configuredShop);
+  return adminUrl && line.barcode ? `[${barcode}](${adminUrl})` : barcode;
+}
+
+function adjustmentLineMarkdown(adjustment, line, index, configuredShop) {
+  return [
+    `${index}. **${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
+    `   Barcode：${barcodeMarkdown(adjustment, line, configuredShop)} | SKU：${markdown(line.sku)}`,
+    `   ${markdown(line.location)} | Before：**${quantity(line.qty_before)}** · Change：${changeMarkdown(line.delta)} · After：**${quantity(line.qty_after)}**`,
+  ].join('\n');
 }
 
 function splitLongSection(section, limit) {
@@ -78,6 +130,8 @@ function detailUrl(adjustment, appUrl) {
 
 export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const maxChars = Math.max(1000, Number(options.maxChars || DEFAULT_MAX_MESSAGE_CHARS));
+  const timeZone = options.timeZone || process.env.TZ || DEFAULT_TIME_ZONE;
+  const configuredShop = options.shop || process.env.SHOP;
   const number = shortAdjustmentNumber(adjustment);
   const lines = Array.isArray(adjustment.lines) ? adjustment.lines : [];
   const recordedBy = markdown(adjustment.recorded_by?.name);
@@ -85,21 +139,16 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
 
   const sections = [
-    `**备注：** ${markdown(adjustment.notes)}`,
-    lines.length ? `**调整明细：**\n${[
-      `1. **${markdown(lines[0].product_title, '(无标题)')}${lines[0].variant_title ? ` / ${markdown(lines[0].variant_title)}` : ''}**`,
-      `   Barcode：${markdown(lines[0].barcode)} | SKU：${markdown(lines[0].sku)}`,
-      `   ${markdown(lines[0].location)} | Before：**${quantity(lines[0].qty_before)}** · Change：${changeMarkdown(lines[0].delta)} · After：**${quantity(lines[0].qty_after)}**`,
-    ].join('\n')}` : '**调整明细：** —',
-    ...lines.slice(1).map((line, index) => [
-      `${index + 2}. **${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
-      `   Barcode：${markdown(line.barcode)} | SKU：${markdown(line.sku)}`,
-      `   ${markdown(line.location)} | Before：**${quantity(line.qty_before)}** · Change：${changeMarkdown(line.delta)} · After：**${quantity(line.qty_after)}**`,
-    ].join('\n')),
+    [`**原因：** ${markdown(adjustment.reason)}`, `**备注：** ${markdown(adjustment.notes)}`].join('\n'),
+    lines.length
+      ? `**调整明细：**\n${adjustmentLineMarkdown(adjustment, lines[0], 1, configuredShop)}`
+      : '**调整明细：** —',
+    ...lines.slice(1).map((line, index) =>
+      adjustmentLineMarkdown(adjustment, line, index + 2, configuredShop)),
     [
-      `**调整原因：** ${markdown(adjustment.reason)}`,
       `**记录员工：** ${recordedBy}`,
       `**经手员工：** ${handledBy}`,
+      `**调整时间：** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}`,
     ].join('\n'),
   ];
 
