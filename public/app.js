@@ -1217,8 +1217,6 @@ const shortAdjustmentNumber = (number, displayNumber = null) => {
   const short = String(displayNumber || '').split('-')[0];
   return esc(short || `A${String(number || 0).padStart(4, '0')}`);
 };
-const stockyTag = (displayNumber) =>
-  stockyOriginalNo(displayNumber) ? '<span class="badge import">Stocky 导入</span>' : '';
 // Variant label, empty when it's the meaningless "Default Title".
 const variantLabel = (row) =>
   row.variant_title && row.variant_title !== 'Default Title' ? esc(row.variant_title) : '';
@@ -1309,7 +1307,7 @@ async function viewAdjustments() {
       </colgroup>
       <thead><tr><th>调整单</th><th>备注 / 原因</th><th>操作人</th><th>仓位</th><th class="num">商品</th><th class="num">合计</th><th>日期</th><th>状态</th></tr></thead>
       <tbody>${result.rows.map((row) => `<tr>
-        <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a>${stockyTag(row.display_number)}</td>
+        <td class="col-no"><a class="item-link" href="#/adjustments/${row.id}">${shortAdjustmentNumber(row.number, row.display_number)}</a></td>
         <td class="col-note">${row.notes ? `<div class="note-main">${esc(row.notes)}</div>` : '<div class="note-main muted">（无备注）</div>'}<div class="muted xsmall">${esc(row.reason || '—')}</div>${row.apply_error ? `<div class="error xsmall">${esc(row.apply_error)}</div>` : ''}</td>
         <td class="col-person">${esc(row.recorded_by_name || '—')}${row.handled_by_names ? `<div class="muted xsmall">经手：${esc(row.handled_by_names)}</div>` : ''}</td>
         <td class="col-loc">${esc(row.locations || '—')}</td>
@@ -1777,7 +1775,7 @@ async function viewAdjustment(id) {
   const total = adjustment.lines.reduce((sum, line) => sum + Number(line.delta), 0);
   const canApply = adjustment.status === 'draft' || adjustment.status === 'applying';
   app.innerHTML = `
-    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${stockyTag(adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
+    <div class="page-heading"><div><h1>${adjustmentNumber(adjustment.number, adjustment.display_number)} ${adjustmentStatus(adjustment.status)}</h1></div>
       <div class="button-group"><a class="back-link" href="#/adjustments">← 返回列表</a>
         ${adjustment.status === 'draft' ? `<a class="button secondary" href="#/adjustments/${id}/edit">编辑 Draft</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? '安全重试提交' : '提交到 Shopify'}</button>` : ''}

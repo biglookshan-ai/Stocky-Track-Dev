@@ -327,7 +327,7 @@ details.card[open] summary { margin-bottom: 12px; }
    unsized second <col> soaks up all remaining width for the notes. */
 .adjustments-table { min-width: 880px; table-layout: fixed; }
 .adjustments-table th, .adjustments-table td { padding: 10px 10px; }
-.adjustments-table col.w-no { width: 92px; }
+.adjustments-table col.w-no { width: 78px; }
 .adjustments-table col.w-person { width: 76px; }
 .adjustments-table col.w-loc { width: 96px; }
 .adjustments-table col.w-qty { width: 46px; }
