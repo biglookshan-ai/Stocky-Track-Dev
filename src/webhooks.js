@@ -78,17 +78,31 @@ async function handle(topic, p, shopDomain, webhookId) {
       if (!loc.rowCount) throw new Error(`unknown location ${p.location_id}`);
       if (typeof p.available !== 'number') return; // untracked item — nothing to record
       const ctx = await offlineCtx(shopDomain || null);
-      const levelGid = `gid://shopify/InventoryLevel/${p.location_id}?inventory_item_id=${p.inventory_item_id}`;
+      // Read every state through inventoryItem → inventoryLevel(locationId:).
+      // The previous composite InventoryLevel GID returned null, so only the
+      // webhook's own `available` was ever applied and on_hand/committed kept
+      // stale values — the product page then disagreed with Shopify.
       const data = await graphql(ctx, `
-        query($id: ID!) {
-          inventoryLevel(id: $id) {
-            quantities(names: ["available", "on_hand", "committed", "incoming", "reserved", "damaged", "safety_stock", "quality_control"]) {
-              name quantity
+        query($itemId: ID!, $locationId: ID!) {
+          inventoryItem(id: $itemId) {
+            inventoryLevel(locationId: $locationId) {
+              quantities(names: ["available", "on_hand", "committed", "incoming", "reserved", "damaged", "safety_stock", "quality_control"]) {
+                name quantity
+              }
             }
           }
-        }`, { id: levelGid });
+        }`, {
+        itemId: `gid://shopify/InventoryItem/${p.inventory_item_id}`,
+        locationId: `gid://shopify/Location/${p.location_id}`,
+      });
+      const states = data.inventoryItem?.inventoryLevel?.quantities;
+      if (!states?.length) {
+        // Never silently degrade to available-only: that is what produced the
+        // stale on_hand values. Fail so the webhook is retried and surfaces.
+        throw new Error(`inventoryLevel quantities unavailable for item ${p.inventory_item_id} @ location ${p.location_id}`);
+      }
       const quantities = {};
-      for (const entry of data.inventoryLevel?.quantities || []) quantities[entry.name] = entry.quantity;
+      for (const entry of states) quantities[entry.name] = entry.quantity;
       if (quantities.available === null || quantities.available === undefined) quantities.available = p.available;
       for (const state of INVENTORY_STATES) {
         if (!(state in quantities)) quantities[state] = null;

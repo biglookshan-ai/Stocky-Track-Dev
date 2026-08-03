@@ -16,6 +16,7 @@ import {
 } from './webhooks.js';
 import { runAttribution } from './attribution.js';
 import { runSnapshot } from './snapshot.js';
+import { upsertCurrentLevel } from './ledger.js';
 import { runStockyImport, undoStockyImport } from './import-stocky.js';
 import {
   groupAuditEvents,
@@ -819,12 +820,44 @@ api.get('/items', async (req, res) => {
 
 // Item detail: current levels + snapshot series. Adjustment history is loaded
 // separately so the UI can paginate through every locally retained event.
+// Refresh one variant's live quantities from Shopify (all states, all
+// locations). Used by the product page so a stale cache is corrected on view
+// instead of waiting for the nightly snapshot.
+async function refreshItemLevels(ctx, itemId, inventoryItemGid) {
+  if (!inventoryItemGid) return;
+  const data = await graphql(ctx, `
+    query($id: ID!) {
+      inventoryItem(id: $id) {
+        inventoryLevels(first: 20) {
+          nodes {
+            location { id }
+            quantities(names: ["available", "on_hand", "committed", "incoming", "reserved", "damaged", "safety_stock", "quality_control"]) { name quantity }
+          }
+        }
+      }
+    }`, { id: inventoryItemGid });
+  const locations = await q('SELECT id, shopify_gid FROM locations WHERE shopify_gid IS NOT NULL');
+  const byGid = new Map(locations.rows.map((l) => [l.shopify_gid, l.id]));
+  for (const node of data.inventoryItem?.inventoryLevels?.nodes || []) {
+    const locationId = byGid.get(node.location?.id);
+    if (!locationId) continue;
+    const qty = {};
+    for (const entry of node.quantities || []) qty[entry.name] = entry.quantity;
+    await upsertCurrentLevel(itemId, locationId, qty);
+  }
+}
+
 api.get('/items/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const item = await q('SELECT * FROM items WHERE id = $1', [id]);
     if (!item.rowCount) return res.status(404).json({ error: 'not found' });
     const productGid = item.rows[0].shopify_product_gid;
+    // Shopify is authoritative; correct the cache before reading it back.
+    await refreshItemLevels(
+      { shop: req.ctx.shop, token: req.ctx.token },
+      id, item.rows[0].shopify_inventory_item_gid,
+    ).catch((e) => console.warn('[items] level refresh failed:', e.message));
     const [levels, lastChange, productMeta] = await Promise.all([
       q(`SELECT l.id AS location_id, l.name, cl.available, cl.on_hand, cl.committed, cl.incoming,
                 cl.reserved, cl.damaged, cl.safety_stock, cl.quality_control,
