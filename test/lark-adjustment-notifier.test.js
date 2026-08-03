@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildAdjustmentNotificationMessages,
   larkWebhookSignature,
-  postLarkTextMessage,
+  postLarkMessage,
 } from '../src/lark-adjustment-notifier.js';
 
 function sampleAdjustment(lineCount = 2) {
@@ -40,33 +40,36 @@ function sampleAdjustment(lineCount = 2) {
 }
 
 test('builds a complete adjustment notification', () => {
-  const messages = buildAdjustmentNotificationMessages(sampleAdjustment(), {
-    timeZone: 'UTC',
-  });
-  const combined = messages.join('\n');
-  assert.match(combined, /库存调整已执行 · A0042-260803/);
-  assert.match(combined, /记录员工：Kay/);
-  assert.match(combined, /经手员工：Chill、Shan/);
-  assert.match(combined, /evidence\.jpg · 2\.0 KB/);
+  const messages = buildAdjustmentNotificationMessages(sampleAdjustment());
+  const combined = JSON.stringify(messages);
+  assert.equal(messages[0].msg_type, 'interactive');
+  assert.equal(messages[0].card.header.template, 'green');
+  assert.equal(messages[0].card.header.title.content, '✅ 库存调整已执行 · A0042');
+  assert.match(combined, /\*\*备注：\*\* 客人取消订单/);
+  assert.match(combined, /\*\*调整明细：\*\*/);
+  assert.match(combined, /\*\*记录员工：\*\* Kay/);
+  assert.match(combined, /\*\*经手员工：\*\* Chill、Shan/);
   assert.match(combined, /Product 1 \/ Variant 1/);
-  assert.match(combined, /Barcode：50000 · SKU：SKU-0/);
-  assert.match(combined, /Before：0 · Change：\+2 · After：2/);
-  assert.match(combined, /查看完整调整单：https:\/\/admin\.shopify\.com/);
+  assert.match(combined, /Barcode：50000 \| SKU：SKU-0/);
+  assert.match(combined, /Before：\*\*0\*\* · Change：<font color='green'>\*\*\+2\*\*<\/font> · After：\*\*2\*\*/);
+  assert.match(combined, /<font color='red'>\*\*-1\*\*<\/font>/);
+  assert.equal(messages.at(-1).card.elements.at(-1).actions[0].url,
+    'https://admin.shopify.com/store/test/apps/inventory/adjustments/42');
 });
 
 test('splits long adjustments without dropping products', () => {
   const adjustment = sampleAdjustment(80);
   const messages = buildAdjustmentNotificationMessages(adjustment, {
-    timeZone: 'UTC',
     maxChars: 1400,
   });
   assert.ok(messages.length > 1);
-  const combined = messages.join('\n');
+  const combined = JSON.stringify(messages);
   for (let index = 0; index < adjustment.lines.length; index += 1) {
     assert.match(combined, new RegExp(`Product ${index + 1} \\/ Variant ${index + 1}`));
   }
-  assert.match(messages[0], /消息 1\//);
-  assert.match(messages.at(-1), new RegExp(`消息 ${messages.length}\/${messages.length}`));
+  assert.match(messages[0].card.header.title.content, /\uff081\//);
+  assert.match(messages.at(-1).card.header.title.content,
+    new RegExp(`（${messages.length}\/${messages.length}）`));
 });
 
 test('creates the Lark custom-bot signature', () => {
@@ -74,12 +77,13 @@ test('creates the Lark custom-bot signature', () => {
   assert.equal(larkWebhookSignature('test-secret', '1722672000'), expected);
 });
 
-test('posts a text message and accepts Lark success responses', async () => {
+test('posts an interactive card and accepts Lark success responses', async () => {
   let request;
-  const result = await postLarkTextMessage({
+  const payload = buildAdjustmentNotificationMessages(sampleAdjustment())[0];
+  const result = await postLarkMessage({
     webhookUrl: 'https://open.larksuite.com/open-apis/bot/v2/hook/test-id',
     secret: 'test-secret',
-    message: 'hello',
+    payload,
     now: 1722672000000,
     fetchImpl: async (url, options) => {
       request = { url, options };
@@ -91,21 +95,22 @@ test('posts a text message and accepts Lark success responses', async () => {
   assert.equal(result.StatusCode, 0);
   assert.equal(request.url, 'https://open.larksuite.com/open-apis/bot/v2/hook/test-id');
   const body = JSON.parse(request.options.body);
-  assert.equal(body.msg_type, 'text');
-  assert.equal(body.content.text, 'hello');
+  assert.equal(body.msg_type, 'interactive');
+  assert.equal(body.card.header.title.content, '✅ 库存调整已执行 · A0042');
   assert.equal(body.timestamp, '1722672000');
   assert.equal(body.sign, larkWebhookSignature('test-secret', '1722672000'));
 });
 
 test('rejects non-Lark webhook URLs and API errors', async () => {
-  await assert.rejects(() => postLarkTextMessage({
+  const payload = buildAdjustmentNotificationMessages(sampleAdjustment())[0];
+  await assert.rejects(() => postLarkMessage({
     webhookUrl: 'https://example.com/hook',
-    message: 'hello',
+    payload,
     fetchImpl: async () => new Response('{}'),
   }), /官方 HTTPS/);
-  await assert.rejects(() => postLarkTextMessage({
+  await assert.rejects(() => postLarkMessage({
     webhookUrl: 'https://open.larksuite.com/open-apis/bot/v2/hook/test-id',
-    message: 'hello',
+    payload,
     fetchImpl: async () => new Response(JSON.stringify({ code: 19021, msg: 'bad sign' }), {
       status: 200,
     }),

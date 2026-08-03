@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
 import { q, withLock } from './db.js';
 
-const DEFAULT_MAX_MESSAGE_CHARS = 12000;
-const DEFAULT_TIME_ZONE = 'Europe/London';
+const DEFAULT_MAX_MESSAGE_CHARS = 7000;
 
 function text(value, fallback = '—') {
   const normalized = String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
@@ -18,28 +17,25 @@ function quantity(value) {
   return value === null || value === undefined || value === '' ? '—' : String(value);
 }
 
-function formatDate(value, timeZone) {
-  if (!value) return '—';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return text(value);
-  return new Intl.DateTimeFormat('zh-CN', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(date);
+function markdown(value, fallback = '—') {
+  return text(value, fallback)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/([\\`*_[\]~])/g, '\\$1');
 }
 
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+function shortAdjustmentNumber(adjustment) {
+  const display = text(adjustment.display_number, '');
+  const match = display.match(/^(A\d+)-\d{6}$/i);
+  if (match) return match[1].toUpperCase();
+  return display || (adjustment.number ? `#${adjustment.number}` : `#${adjustment.id}`);
+}
+
+function changeMarkdown(value) {
+  const amount = signed(value);
+  const color = Number(value) > 0 ? 'green' : Number(value) < 0 ? 'red' : 'grey';
+  return `<font color='${color}'>**${amount}**</font>`;
 }
 
 function splitLongSection(section, limit) {
@@ -81,60 +77,58 @@ function detailUrl(adjustment, appUrl) {
 }
 
 export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
-  const timeZone = options.timeZone || process.env.TZ || DEFAULT_TIME_ZONE;
   const maxChars = Math.max(1000, Number(options.maxChars || DEFAULT_MAX_MESSAGE_CHARS));
-  const number = text(
-    adjustment.display_number,
-    adjustment.number ? `#${adjustment.number}` : `#${adjustment.id}`,
-  );
+  const number = shortAdjustmentNumber(adjustment);
   const lines = Array.isArray(adjustment.lines) ? adjustment.lines : [];
-  const attachments = Array.isArray(adjustment.attachments) ? adjustment.attachments : [];
-  const total = lines.reduce((sum, line) => sum + Number(line.delta || 0), 0);
-  const locations = [...new Set(lines.map((line) => text(line.location, '')).filter(Boolean))];
-  const recordedBy = text(adjustment.recorded_by?.name);
-  const handledBy = text(adjustment.handled_by?.map((person) => person.name).filter(Boolean).join('、'));
-  const loginAccount = text(
-    adjustment.created_by_account_name
-      || adjustment.login_account_name
-      || adjustment.applied_by_account_name,
-  );
+  const recordedBy = markdown(adjustment.recorded_by?.name);
+  const handledBy = markdown(adjustment.handled_by?.map((person) => person.name).filter(Boolean).join('、'));
   const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
 
   const sections = [
-    [
-      '状态：Applied',
-      `调整原因：${text(adjustment.reason)}`,
-      `仓位：${locations.length ? locations.join('、') : '—'}`,
-      `合计变化：${signed(total)}`,
-      `记录员工：${recordedBy}`,
-      `经手员工：${handledBy}`,
-      `Shopify 登录账号：${loginAccount}`,
-      `创建时间：${formatDate(adjustment.created_at, timeZone)}`,
-      `完成时间：${formatDate(adjustment.applied_at, timeZone)}`,
-    ].join('\n'),
-    `调整备注：${text(adjustment.notes)}`,
-    attachments.length
-      ? `证明附件（${attachments.length}）：\n${attachments.map((attachment, index) =>
-        `${index + 1}. ${text(attachment.original_name)} · ${formatBytes(attachment.size_bytes)} · 上传人 ${text(attachment.uploaded_by_name)}`).join('\n')}`
-      : '证明附件：无',
-    `调整明细（共 ${lines.length} 个商品/仓位）`,
-    ...lines.map((line, index) => [
-      `${index + 1}. ${text(line.product_title, '(无标题)')}${line.variant_title ? ` / ${text(line.variant_title)}` : ''}`,
-      `   Brand：${text(line.vendor)} · Barcode：${text(line.barcode)} · SKU：${text(line.sku)}`,
-      `   仓位：${text(line.location)} · Before：${quantity(line.qty_before)} · Change：${signed(line.delta)} · After：${quantity(line.qty_after)}`,
+    `**备注：** ${markdown(adjustment.notes)}`,
+    lines.length ? `**调整明细：**\n${[
+      `1. **${markdown(lines[0].product_title, '(无标题)')}${lines[0].variant_title ? ` / ${markdown(lines[0].variant_title)}` : ''}**`,
+      `   Barcode：${markdown(lines[0].barcode)} | SKU：${markdown(lines[0].sku)}`,
+      `   ${markdown(lines[0].location)} | Before：**${quantity(lines[0].qty_before)}** · Change：${changeMarkdown(lines[0].delta)} · After：**${quantity(lines[0].qty_after)}**`,
+    ].join('\n')}` : '**调整明细：** —',
+    ...lines.slice(1).map((line, index) => [
+      `${index + 2}. **${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
+      `   Barcode：${markdown(line.barcode)} | SKU：${markdown(line.sku)}`,
+      `   ${markdown(line.location)} | Before：**${quantity(line.qty_before)}** · Change：${changeMarkdown(line.delta)} · After：**${quantity(line.qty_after)}**`,
     ].join('\n')),
+    [
+      `**调整原因：** ${markdown(adjustment.reason)}`,
+      `**记录员工：** ${recordedBy}`,
+      `**经手员工：** ${handledBy}`,
+    ].join('\n'),
   ];
 
-  const title = `✅ 库存调整已执行 · ${number}`;
-  const footer = url ? `\n\n查看完整调整单：${url}` : '';
-  const contentLimit = Math.max(500, maxChars - title.length - footer.length - 40);
-  const pages = packSections(sections, contentLimit);
-  return pages.map((page, index) => [
-    title,
-    pages.length > 1 ? `消息 ${index + 1}/${pages.length}` : '',
-    '',
-    page,
-  ].filter((line, lineIndex) => line || lineIndex === 2).join('\n') + footer);
+  const pages = packSections(sections, maxChars);
+  return pages.map((page, index) => ({
+    msg_type: 'interactive',
+    card: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: 'green',
+        title: {
+          tag: 'plain_text',
+          content: `✅ 库存调整已执行 · ${number}${pages.length > 1 ? `（${index + 1}/${pages.length}）` : ''}`,
+        },
+      },
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content: page } },
+        ...(url && index === pages.length - 1 ? [{
+          tag: 'action',
+          actions: [{
+            tag: 'button',
+            text: { tag: 'plain_text', content: '查看完整调整单' },
+            type: 'primary',
+            url,
+          }],
+        }] : []),
+      ],
+    },
+  }));
 }
 
 export function larkWebhookSignature(secret, timestamp) {
@@ -157,16 +151,19 @@ function validateWebhookUrl(webhookUrl) {
   return url.toString();
 }
 
-export async function postLarkTextMessage({
+export async function postLarkMessage({
   webhookUrl,
   secret = '',
-  message,
+  payload,
   fetchImpl = globalThis.fetch,
   now = Date.now(),
   timeoutMs = 10000,
 }) {
   const url = validateWebhookUrl(webhookUrl);
-  const body = { msg_type: 'text', content: { text: message } };
+  if (!payload || payload.msg_type !== 'interactive' || !payload.card) {
+    throw new Error('Lark 消息卡片内容无效');
+  }
+  const body = { ...payload };
   if (secret) {
     const timestamp = String(Math.floor(Number(now) / 1000));
     body.timestamp = timestamp;
@@ -226,10 +223,10 @@ export async function notifyAppliedAdjustmentOnce(adjustment, options = {}) {
     );
     try {
       for (let index = startAt; index < messages.length; index += 1) {
-        await postLarkTextMessage({
+        await postLarkMessage({
           webhookUrl,
           secret: options.secret ?? process.env.LARK_ADJUSTMENT_WEBHOOK_SECRET ?? '',
-          message: messages[index],
+          payload: messages[index],
           fetchImpl: options.fetchImpl,
           now: options.now,
           timeoutMs: options.timeoutMs,
