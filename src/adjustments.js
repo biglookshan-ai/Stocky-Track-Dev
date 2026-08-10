@@ -745,7 +745,7 @@ export async function adjustmentsCsv(filters = {}) {
   );
   const headers = [
     'Adjustment', 'Status', 'Created at', 'Applied at', 'Reason',
-    'Shopify account', 'Recorded by', 'Carried out by', 'Notes', 'Location',
+    'Shopify account', 'Recorded by', 'Handled by', 'Notes', 'Location',
     'Barcode', 'SKU', 'Brand', 'Product', 'Variant', 'Before', 'Delta', 'After',
   ];
   return [

@@ -57,7 +57,7 @@ test('every field switch removes exactly its own part of the card', () => {
   assert.doesNotMatch(cardText(normalizeLarkSettings({ showLocation: false })), /CineGearPro Shop/);
   assert.doesNotMatch(cardText(normalizeLarkSettings({ showBeforeAfter: false })), /Before:/);
   assert.doesNotMatch(cardText(normalizeLarkSettings({ showRecordedBy: false })), /Recorded by:/);
-  assert.doesNotMatch(cardText(normalizeLarkSettings({ showHandledBy: false })), /Carried out by:/);
+  assert.doesNotMatch(cardText(normalizeLarkSettings({ showHandledBy: false })), /Handled by:/);
   assert.doesNotMatch(cardText(normalizeLarkSettings({ showAppliedAt: false })), /Adjusted at:/);
   assert.doesNotMatch(cardText(normalizeLarkSettings({ showDetailButton: false })), /View full adjustment/);
 });

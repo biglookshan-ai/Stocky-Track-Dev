@@ -53,7 +53,7 @@ test('builds a complete adjustment notification', () => {
   assert.match(combined, /客人取消订单，手动增加库存/);
   assert.match(combined, /\*\*Items:\*\*/);
   assert.match(combined, /\*\*Recorded by:\*\* Kay/);
-  assert.match(combined, /\*\*Carried out by:\*\* Chill, Shan/);
+  assert.match(combined, /\*\*Handled by:\*\* Chill, Shan/);
   assert.match(combined, /Product 1 \/ Variant 1/);
   assert.match(combined, /Barcode: \[50000\]\(https:\/\/admin\.shopify\.com\/store\/test\/products\/15762296209786\/variants\/57102666269050\) \| SKU: SKU-0/);
   assert.match(combined, /Change: <font color='green'>\*\*\+2\*\*<\/font> · Before: \*\*0\*\* · After: \*\*2\*\*/);
