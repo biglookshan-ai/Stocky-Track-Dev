@@ -100,7 +100,7 @@ test('an undo gets its own heading and colour, and says what it undoes', () => {
   const [message] = buildAdjustmentNotificationMessages(reversal, {
     settings: normalizeLarkSettings({}),
   });
-  assert.equal(message.card.header.title.content, '❗ Adjustment undone · A0042');
+  assert.equal(message.card.header.title.content, '❕ Adjustment undone · A0042');
   assert.equal(message.card.header.template, 'orange');
   assert.match(JSON.stringify(message), /\*\*Undoes:\*\* A0009/);
 });
@@ -130,7 +130,7 @@ test('a rejected submission says the stock did not change', () => {
     kind: 'rejected',
     error: 'Quantity has changed since this adjustment was created',
   });
-  assert.equal(card.card.header.title.content, '❌ Stock adjustment failed · A0042');
+  assert.equal(card.card.header.title.content, '✖ Stock adjustment failed · A0042');
   assert.equal(card.card.header.template, 'red');
   const text = JSON.stringify(card);
   assert.match(text, /Stock was not changed/);
