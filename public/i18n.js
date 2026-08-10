@@ -91,7 +91,7 @@
     '商品明细': 'Item list',
     '关掉就只发一条摘要,不列具体商品': 'Switch off to send a summary only, without listing the products',
     '可点击直达 Shopify 后台该变体': 'Clickable — opens that variant in your Shopify admin',
-    '这次调整发生在哪个仓库': 'Which warehouse the change happened in',
+    '这次调整发生在哪个仓库(整单只显示一次)': 'Which warehouse — shown once for the whole adjustment, not on every product',
     '调整前 / 调整后数量': 'Before / after quantities',
     '关掉只显示变化量,如 +5': 'Switch off to show only the change, e.g. +5',
     '记录员工': 'Recorded by',

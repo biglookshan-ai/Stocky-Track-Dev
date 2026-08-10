@@ -122,7 +122,7 @@ function adjustmentLineBlock(adjustment, line, index, configuredShop, settings) 
     settings.showSku ? `SKU: ${markdown(line.sku)}` : '',
   ].filter(Boolean).join(' | ');
   const movement = [
-    settings.showLocation ? markdown(line.location) : '',
+    settings.showLocation && !settings.locationStatedOnce ? markdown(line.location) : '',
     [
       `Change: ${changeMarkdown(line.delta)}`,
       settings.showBeforeAfter ? `Before: **${quantity(line.qty_before)}**` : '',
@@ -195,6 +195,12 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const undoes = adjustment.reversal_of
     ? shortAdjustmentNumber(adjustment.reversal_of)
     : '';
+  // A new adjustment is created against one location, so repeating it on every
+  // product line is noise. Imported historical adjustments can still span
+  // locations, and those keep the per-line label.
+  const locations = [...new Set(lines.map((line) => line.location).filter(Boolean))];
+  const sharedLocation = settings.showLocation && locations.length === 1 ? locations[0] : '';
+  const lineSettings = { ...settings, locationStatedOnce: Boolean(sharedLocation) };
   const note = markdown(adjustment.notes).replace(/\r\n?/g, '\n');
   const noteChunks = settings.showNotes
     ? splitLongSection(note, Math.max(500, maxChars - 100))
@@ -220,10 +226,14 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
       charCount: chunk.length + 6,
       elements: [alignedColumns('**Note:**', chunk)],
     })),
+    ...(sharedLocation ? [{
+      charCount: sharedLocation.length + 14,
+      elements: [markdownElement(`**Location:** ${markdown(sharedLocation)}`)],
+    }] : []),
     ...(settings.showLines ? [
       { charCount: detailHeading.length, elements: [markdownElement(detailHeading)] },
       ...lines.map((line, index) =>
-        adjustmentLineBlock(adjustment, line, index + 1, configuredShop, settings)),
+        adjustmentLineBlock(adjustment, line, index + 1, configuredShop, lineSettings)),
     ] : []),
     ...(footer ? [{ charCount: footer.length, elements: [markdownElement(footer)] }] : []),
   ];

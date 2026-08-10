@@ -771,8 +771,17 @@ api.put('/lark-settings', async (req, res) => {
 // It uses the most recent applied adjustment when there is one, so the preview
 // shows real products rather than invented ones.
 async function buildLarkPreview(settings) {
+  // Most adjustments cover several products, and the layout only really shows
+  // itself with more than one line — so prefer a recent multi-product one, and
+  // fall back to any applied adjustment, then to a two-product sample.
   const recent = await q(
-    `SELECT id FROM adjustments WHERE status='applied' ORDER BY applied_at DESC NULLS LAST LIMIT 1`);
+    `SELECT a.id
+     FROM adjustments a
+     JOIN adjustment_lines al ON al.adjustment_id = a.id
+     WHERE a.status='applied'
+     GROUP BY a.id, a.applied_at
+     ORDER BY (count(al.id) > 1) DESC, a.applied_at DESC NULLS LAST
+     LIMIT 1`);
   const adjustment = recent.rowCount
     ? await getAdjustment(recent.rows[0].id)
     : {
@@ -787,6 +796,10 @@ async function buildLarkPreview(settings) {
         product_title: 'Sample product', variant_title: 'Black',
         barcode: '5060000000000', sku: 'SAMPLE-01', location: 'CineGearPro Shop',
         delta: 2, qty_before: 3, qty_after: 5,
+      }, {
+        product_title: 'Another sample product', variant_title: 'Large',
+        barcode: '5060000000001', sku: 'SAMPLE-02', location: 'CineGearPro Shop',
+        delta: -1, qty_before: 4, qty_after: 3,
       }],
     };
   return {

@@ -673,7 +673,7 @@ async function viewLarkSettings() {
     ['showLines', t('商品明细'), t('关掉就只发一条摘要,不列具体商品')],
     ['showBarcode', t('Barcode'), t('可点击直达 Shopify 后台该变体'), 'showLines'],
     ['showSku', t('SKU'), '', 'showLines'],
-    ['showLocation', t('仓位'), t('这次调整发生在哪个仓库'), 'showLines'],
+    ['showLocation', t('仓位'), t('这次调整发生在哪个仓库(整单只显示一次)'), 'showLines'],
     ['showBeforeAfter', t('调整前 / 调整后数量'), t('关掉只显示变化量,如 +5'), 'showLines'],
     ['showRecordedBy', t('记录员工'), ''],
     ['showHandledBy', t('经手员工'), ''],

@@ -155,3 +155,51 @@ test('an unrecognised failure kind is treated as a rejection, not dropped', () =
   }));
   assert.match(text, /Stock was not changed/);
 });
+
+const TWO_LINES = {
+  ...ADJUSTMENT,
+  lines: [
+    ADJUSTMENT.lines[0],
+    {
+      product_title: 'Product 2', variant_title: 'Variant 2',
+      barcode: '50001', sku: 'SKU-1', location: 'CineGearPro Shop',
+      delta: -1, qty_before: 4, qty_after: 3,
+    },
+  ],
+};
+
+test('one location is stated once for the whole card, not per product', () => {
+  const card = cardText(normalizeLarkSettings({}));
+  assert.match(card, /\*\*Location:\*\* CineGearPro Shop/);
+  // The line itself now starts straight at the change.
+  assert.match(card, /Change: <font/);
+  assert.doesNotMatch(card, /CineGearPro Shop \| Change:/);
+});
+
+test('several products at one location still only name it once', () => {
+  const card = JSON.stringify(
+    buildAdjustmentNotificationMessages(TWO_LINES, { settings: normalizeLarkSettings({}) }),
+  );
+  assert.equal(card.match(/CineGearPro Shop/g).length, 1);
+  assert.match(card, /Product 1/);
+  assert.match(card, /Product 2/);
+});
+
+test('an adjustment spanning locations keeps the label on every line', () => {
+  const mixed = {
+    ...TWO_LINES,
+    lines: [TWO_LINES.lines[0], { ...TWO_LINES.lines[1], location: 'External Warehouse' }],
+  };
+  const card = JSON.stringify(
+    buildAdjustmentNotificationMessages(mixed, { settings: normalizeLarkSettings({}) }),
+  );
+  assert.doesNotMatch(card, /\*\*Location:\*\*/);
+  assert.match(card, /CineGearPro Shop \| Change:/);
+  assert.match(card, /External Warehouse \| Change:/);
+});
+
+test('switching off location removes it from both places', () => {
+  const off = normalizeLarkSettings({ showLocation: false });
+  assert.doesNotMatch(cardText(off), /CineGearPro Shop/);
+  assert.doesNotMatch(cardText(off), /\*\*Location:\*\*/);
+});
