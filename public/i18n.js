@@ -491,6 +491,8 @@
     '添加图片、视频或文件': 'Add photos, videos or files',
     '每个文件最大 50 MB，每张调整单最多 20 个；保存 Draft 后上传，不会写入 Shopify。': 'Up to 50 MB each and 20 per adjustment; uploaded after the draft is saved, never sent to Shopify.',
     '调整明细': 'Adjustment lines',
+    '调整商品': 'Adjustment products',
+    '附件 Attachment': 'Attachment',
     '加入的商品会显示在这里；选择 − 或 +，再输入变化数量。': 'Products you add appear here; pick − or +, then enter the change.',
     '添加商品': 'Add products',
     '保存 Draft': 'Save draft',

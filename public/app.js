@@ -1878,14 +1878,14 @@ async function viewAdjustmentForm(id = null) {
         </div>
         <label class="notes-field"><span>Notes</span><textarea id="draft-notes" maxlength="10000" rows="4" placeholder="${t('详细填写调整原因、票据编号、处理过程或内部说明')}">${esc(adjustment?.notes || '')}</textarea></label>
         <div class="evidence-field">
-          <span>Evidence attachments</span>
+          <span>${t('附件 Attachment')}</span>
           <div class="evidence-picker"><input id="draft-attachments" type="file" multiple accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"><label for="draft-attachments" class="button secondary">${t('添加图片、视频或文件')}</label></div>
           <p class="muted small">${t('每个文件最大 50 MB，每张调整单最多 20 个；保存 Draft 后上传，不会写入 Shopify。')}</p>
           <div id="pending-attachments"></div>
           ${id ? `<div id="existing-attachments">${attachmentListHtml(adjustment.attachments, true)}</div>` : ''}
         </div>
       </div>
-      <div class="section-heading adjustment-lines-heading"><div><h2>${t('调整明细')}</h2><p class="muted compact">${t('加入的商品会显示在这里；选择 − 或 +，再输入变化数量。')}</p></div>
+      <div class="section-heading adjustment-lines-heading"><div><h2>${t('调整商品')}</h2><p class="muted compact">${t('加入的商品会显示在这里；选择 − 或 +，再输入变化数量。')}</p></div>
         <button id="draft-item-open" type="button">${t('添加商品')}</button></div>
       <div id="draft-lines"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `/adjustments/${id}` : '/adjustments'}" data-app-back>${t('取消')}</a><button id="save-draft">${t('保存 Draft')}</button></div>
@@ -2228,7 +2228,10 @@ async function viewAdjustment(id) {
     ${adjustment.reversed_by?.length ? `<div class="notice"><strong>${t('这张调整单已被撤销。')}</strong>${t('撤销单：{numbers}', { numbers: adjustment.reversed_by.map((row) => `<a href="/adjustments/${row.id}">${esc(adjustmentNumber(row.number, row.display_number))}</a>${row.status === 'draft' ? `（${t('草稿，尚未提交')}）` : ''}`).join(listSep) })}</div>` : ''}
     ${adjustment.apply_error ? `<div class="notice adjustment-error"><strong>${t('上次提交信息：')}</strong>${esc(adjustment.apply_error)}</div>` : ''}
     ${adjustment.lark_notify_error ? `<div class="notice adjustment-error"><strong>${t('库存调整已成功，但 Lark 通知发送失败：')}</strong>${esc(adjustment.lark_notify_error)} <button id="retry-lark-notification" class="secondary">${t('重试发送')}</button></div>` : ''}
-    ${adjustment.notes ? `<div class="card adjustment-notes-card"><span class="field-label">${t('调整备注 Notes')}</span><p class="notes-body">${esc(adjustment.notes)}</p></div>` : ''}
+    ${adjustment.notes || adjustment.attachments.length ? `<div class="card adjustment-notes-card">
+      ${adjustment.notes ? `<span class="field-label">${t('调整备注 Notes')}</span><p class="notes-body">${esc(adjustment.notes)}</p>` : ''}
+      <div class="adjustment-evidence"><span class="field-label">${t('附件 Attachment')}</span>${attachmentListHtml(adjustment.attachments)}</div>
+    </div>` : ''}
     <div class="card event-overview adjustment-overview">
       <div><span>${t('调整原因 Reason')}</span><strong>${esc(adjustment.reason || '—')}</strong></div>
       <div><span>${t('记录员工 Recorded by')}</span><strong>${esc(adjustment.recorded_by?.name || '—')}</strong></div>
@@ -2239,7 +2242,7 @@ async function viewAdjustment(id) {
       <div><span>${t('Shopify 登录账号')}</span><strong>${esc(adjustment.created_by_account_name || adjustment.login_account_name || '—')}</strong></div>
     </div>
     <div class="card">
-      <div class="card-heading"><div><h2>${t('调整明细')}</h2><p class="muted compact">${t('共 {n} 个商品/仓位；数量均为 Available。', { n: adjustment.lines.length })}${stockyOriginalNo(adjustment.display_number) ? t('Stocky 导出不含调整前/后数量，故 Before/After 显示为 —。') : ''}</p></div></div>
+      <div class="card-heading"><div><h2>${t('调整商品')}</h2><p class="muted compact">${t('共 {n} 个商品/仓位；数量均为 Available。', { n: adjustment.lines.length })}${stockyOriginalNo(adjustment.display_number) ? t('Stocky 导出不含调整前/后数量，故 Before/After 显示为 —。') : ''}</p></div></div>
       <div class="table-scroll"><table class="adjustment-lines detail-lines">
         <colgroup><col><col class="w-variant"><col class="w-code"><col class="w-n"><col class="w-n"><col class="w-n"></colgroup>
         <thead><tr><th>${t('商品')}</th><th>${t('变体')}</th><th>Barcode / SKU</th><th>Before</th><th>Change</th><th>After</th></tr></thead>
@@ -2251,10 +2254,6 @@ async function viewAdjustment(id) {
           <td class="col-n"><strong>${numOrDash(line.qty_after)}</strong>${adjustment.status === 'draft' && line.qty_before !== null && Number(line.current_available) !== Number(line.qty_before) ? `<div class="warning small">${t('当前 {n}，提交时会重新校验', { n: line.current_available })}</div>` : ''}</td>
         </tr>`).join('') : `<tr><td colspan="6" class="muted">${t('此调整单没有商品明细（导入时商品无法识别）')}</td></tr>`}</tbody>
       </table></div>
-      <div class="adjustment-evidence">
-        <strong>Evidence attachments</strong>
-        ${attachmentListHtml(adjustment.attachments)}
-      </div>
     </div>
     ${canApply ? `<div class="notice"><strong>${t('提交前确认：')}</strong>${t('这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。')}</div>` : ''}`;
   await wireAttachmentActions(id, adjustment.attachments);

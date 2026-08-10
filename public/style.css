@@ -616,3 +616,7 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
   font-size: var(--fs-sm); padding: 8px 10px;
 }
 .button.quiet:hover, button.quiet:hover { color: var(--text); background: var(--bg); }
+/* Attachments sit with the note they are evidence for, separated by a rule
+   rather than by being in a different card. */
+.adjustment-notes-card .adjustment-evidence { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee5c9; }
+.adjustment-notes-card .adjustment-evidence:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
