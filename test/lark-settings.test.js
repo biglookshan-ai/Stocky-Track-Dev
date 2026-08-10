@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_LARK_SETTINGS, normalizeLarkSettings, normalizeWebhookUrl, maskWebhookUrl,
 } from '../src/lark-settings.js';
-import { buildAdjustmentNotificationMessages } from '../src/lark-adjustment-notifier.js';
+import {
+  buildAdjustmentNotificationMessages, buildAdjustmentFailureMessage,
+} from '../src/lark-adjustment-notifier.js';
 
 const ADJUSTMENT = {
   id: 42,
@@ -91,4 +93,65 @@ test('the masked webhook hides the bot token but stays recognisable', () => {
   assert.match(masked, /^https:\/\/open\.larksuite\.com\/open-apis\/bot\/v2\/hook\//);
   assert.doesNotMatch(masked, /abcdef123456/);
   assert.equal(maskWebhookUrl(''), '');
+});
+
+test('an undo gets its own heading and colour, and says what it undoes', () => {
+  const reversal = { ...ADJUSTMENT, reversal_of: { display_number: 'A0009-260808' } };
+  const [message] = buildAdjustmentNotificationMessages(reversal, {
+    settings: normalizeLarkSettings({}),
+  });
+  assert.equal(message.card.header.title.content, '↩️ Adjustment undone · A0042');
+  assert.equal(message.card.header.template, 'orange');
+  assert.match(JSON.stringify(message), /\*\*Undoes:\*\* A0009/);
+});
+
+test('a normal adjustment is unaffected by the undo wording', () => {
+  const [message] = buildAdjustmentNotificationMessages(ADJUSTMENT, {
+    settings: normalizeLarkSettings({}),
+  });
+  assert.equal(message.card.header.title.content, '✅ Stock adjustment applied · A0042');
+  assert.doesNotMatch(JSON.stringify(message), /Undoes/);
+});
+
+test('the three titles and colours are validated independently', () => {
+  const settings = normalizeLarkSettings({
+    reversalTitle: 'Undone {number}', failureColour: 'grey',
+  });
+  assert.equal(settings.reversalTitle, 'Undone {number}');
+  assert.equal(settings.failureColour, 'grey');
+  assert.equal(settings.title, DEFAULT_LARK_SETTINGS.title);
+  assert.throws(() => normalizeLarkSettings({ failureTitle: '  ' }), /标题不能为空/);
+  assert.throws(() => normalizeLarkSettings({ reversalColour: 'gold' }), /颜色无效/);
+});
+
+test('a rejected submission says the stock did not change', () => {
+  const card = buildAdjustmentFailureMessage(ADJUSTMENT, {
+    settings: normalizeLarkSettings({}),
+    kind: 'rejected',
+    error: 'Quantity has changed since this adjustment was created',
+  });
+  assert.equal(card.card.header.title.content, '⚠️ Stock adjustment failed · A0042');
+  assert.equal(card.card.header.template, 'red');
+  const text = JSON.stringify(card);
+  assert.match(text, /Stock was not changed/);
+  assert.match(text, /Quantity has changed since/);
+  assert.match(text, /submit again/);
+});
+
+test('an unconfirmed submission says the result is unknown and retrying is safe', () => {
+  const text = JSON.stringify(buildAdjustmentFailureMessage(ADJUSTMENT, {
+    settings: normalizeLarkSettings({}),
+    kind: 'unknown',
+    error: 'socket hang up',
+  }));
+  assert.match(text, /did not confirm the result/);
+  assert.match(text, /cannot apply twice/);
+  assert.doesNotMatch(text, /Stock was not changed/);
+});
+
+test('an unrecognised failure kind is treated as a rejection, not dropped', () => {
+  const text = JSON.stringify(buildAdjustmentFailureMessage(ADJUSTMENT, {
+    settings: normalizeLarkSettings({}), kind: 'nonsense', error: 'x',
+  }));
+  assert.match(text, /Stock was not changed/);
 });

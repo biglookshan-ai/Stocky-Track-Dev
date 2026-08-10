@@ -116,6 +116,16 @@
     'Lark 群机器人 Webhook 地址无效': 'That Lark group bot webhook address is not valid',
     'Lark 群机器人 Webhook 必须使用官方 HTTPS 地址': 'The Lark group bot webhook must be an official HTTPS address',
 
+    '三种卡片的标题和颜色': 'Titles and colours',
+    '调整成功': 'Adjustment applied',
+    '正常提交一张调整单': 'A normal adjustment goes through',
+    '撤销调整': 'Adjustment undone',
+    '撤销单提交后,群里一眼能看出是撤销': 'So an undo is obvious at a glance in the group',
+    '提交失败': 'Submission failed',
+    '提交没成功时提醒群里,以免只有操作的人知道': 'Warns the group when a submission fails, so it is not known only to whoever clicked',
+    '提交失败时通知群里': 'Notify the group when a submission fails',
+    '已关闭,失败时不会通知群里。': 'Switched off — failures are not announced in the group.',
+
     // ---- status help tooltips ----
     '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。': "Change records only show entries confirmed in Shopify's official history (with the person/app, reason and document). This number counts quantity changes still waiting for that official record — it usually arrives within minutes and posts automatically, and nothing incomplete is shown in the meantime.",
     '库存数字是实时的（变动信号一到就更新）。这里显示的是每天凌晨把全店所有商品与 Shopify 逐一核对的完成时间，是二次保险，不代表数字停留在该时刻。': 'Stock numbers are live (they update the moment a change signal arrives). This shows when the overnight full check against Shopify last finished — a second safety net, not the time the numbers are from.',

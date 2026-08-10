@@ -598,3 +598,13 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
   .lark-settings-layout { grid-template-columns: minmax(0, 1fr); }
   .lark-preview-card { position: static; }
 }
+.lark-variant { padding: 10px 0; border-top: 1px solid var(--border); }
+.lark-variant:first-of-type { border-top: 0; padding-top: 4px; }
+.lark-variant-head strong { font-weight: var(--fw-medium); }
+.lark-variant-head em { display: block; font-style: normal; color: var(--sub); font-size: var(--fs-xs); line-height: 1.4; margin-bottom: 6px; }
+.lark-variant-fields { display: flex; gap: 8px; }
+.lark-variant-fields input { flex: 1 1 auto; min-width: 0; width: auto; }
+.lark-variant-fields select { flex: 0 0 auto; }
+.lark-variant .active-toggle { margin-top: 7px; }
+.lark-preview-group + .lark-preview-group { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.lark-preview-group h3 { margin: 0 0 8px; font-size: var(--fs-sm); color: var(--sub); font-weight: var(--fw-medium); }

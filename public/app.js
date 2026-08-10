@@ -702,15 +702,22 @@ async function viewLarkSettings() {
           </label>
         </div>
         <div class="card">
-          <h2>${t('卡片外观')}</h2>
-          <label class="field"><span>${t('标题')}</span>
-            <input type="text" id="lark-title" value="${esc(settings.title)}" maxlength="120">
-          </label>
+          <h2>${t('三种卡片的标题和颜色')}</h2>
           <p class="muted small">${t('{number} 会替换成调整单号,如 A0042。')}</p>
-          <label class="field"><span>${t('标题栏颜色')}</span>
-            <select id="lark-colour">${(config.colours || []).map((colour) =>
-              `<option value="${colour}" ${settings.headerColour === colour ? 'selected' : ''}>${t(colour)}</option>`).join('')}</select>
-          </label>
+          ${[
+            ['', t('调整成功'), t('正常提交一张调整单')],
+            ['reversal', t('撤销调整'), t('撤销单提交后,群里一眼能看出是撤销')],
+            ['failure', t('提交失败'), t('提交没成功时提醒群里,以免只有操作的人知道')],
+          ].map(([kind, label, hint]) => `
+            <div class="lark-variant">
+              <div class="lark-variant-head"><strong>${label}</strong><em>${hint}</em></div>
+              <div class="lark-variant-fields">
+                <input type="text" data-title="${kind}" value="${esc(kind ? settings[`${kind}Title`] : settings.title)}" maxlength="120">
+                <select data-colour="${kind}">${(config.colours || []).map((colour) =>
+                  `<option value="${colour}" ${(kind ? settings[`${kind}Colour`] : settings.headerColour) === colour ? 'selected' : ''}>${t(colour)}</option>`).join('')}</select>
+              </div>
+              ${kind === 'failure' ? `<label class="active-toggle"><input type="checkbox" data-field="notifyOnFailure" ${settings.notifyOnFailure ? 'checked' : ''}> ${t('提交失败时通知群里')}</label>` : ''}
+            </div>`).join('')}
         </div>
         <div class="card">
           <h2>${t('显示哪些内容')}</h2>
@@ -739,8 +746,13 @@ async function viewLarkSettings() {
   const readForm = () => {
     const next = { ...settings, enabled: $('#lark-enabled').checked };
     document.querySelectorAll('[data-field]').forEach((box) => { next[box.dataset.field] = box.checked; });
-    next.title = $('#lark-title').value.trim() || settings.title;
-    next.headerColour = $('#lark-colour').value;
+    document.querySelectorAll('[data-title]').forEach((input) => {
+      const key = input.dataset.title ? `${input.dataset.title}Title` : 'title';
+      next[key] = input.value.trim() || settings[key];
+    });
+    document.querySelectorAll('[data-colour]').forEach((select) => {
+      next[select.dataset.colour ? `${select.dataset.colour}Colour` : 'headerColour'] = select.value;
+    });
     return next;
   };
   const syncNested = () => {
@@ -754,14 +766,19 @@ async function viewLarkSettings() {
   const renderPreview = async () => {
     const generation = currentNav();
     try {
-      const { messages, sample } = await api('/lark-settings/preview', {
+      const { messages, reversal, failure, sample } = await api('/lark-settings/preview', {
         method: 'POST', body: JSON.stringify({ settings: readForm() }),
       });
       if (!isCurrent(generation)) return;
       $w('#lark-preview-note').textContent = sample
         ? t('还没有已提交的调整单,下面用示例商品演示。')
         : t('用你最近一张已提交的调整单演示。');
-      $w('#lark-preview').innerHTML = messages.map(larkCard).join('');
+      const form = readForm();
+      $w('#lark-preview').innerHTML = [
+        [t('调整成功'), messages.map(larkCard).join('')],
+        [t('撤销调整'), reversal.map(larkCard).join('')],
+        [t('提交失败'), form.notifyOnFailure ? larkCard(failure) : `<p class="muted small">${t('已关闭,失败时不会通知群里。')}</p>`],
+      ].map(([label, html]) => `<div class="lark-preview-group"><h3>${label}</h3>${html}</div>`).join('');
     } catch (error) {
       $w('#lark-preview').innerHTML = `<p class="error">${esc(error.message)}</p>`;
     }
@@ -771,10 +788,12 @@ async function viewLarkSettings() {
     clearTimeout(previewTimer);
     previewTimer = setTimeout(renderPreview, 250);
   };
-  document.querySelectorAll('[data-field], #lark-colour, #lark-enabled').forEach((input) => {
+  document.querySelectorAll('[data-field], [data-colour], #lark-enabled').forEach((input) => {
     input.onchange = schedulePreview;
   });
-  $('#lark-title').addEventListener('input', schedulePreview);
+  document.querySelectorAll('[data-title]').forEach((input) => {
+    input.addEventListener('input', schedulePreview);
+  });
 
   const status = (message, isError = false) => {
     const node = $w('#lark-status');

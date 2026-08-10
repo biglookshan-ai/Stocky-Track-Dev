@@ -192,6 +192,9 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
     ? detailUrl(adjustment, options.appUrl || process.env.APP_URL)
     : '';
 
+  const undoes = adjustment.reversal_of
+    ? shortAdjustmentNumber(adjustment.reversal_of)
+    : '';
   const note = markdown(adjustment.notes).replace(/\r\n?/g, '\n');
   const noteChunks = settings.showNotes
     ? splitLongSection(note, Math.max(500, maxChars - 100))
@@ -203,6 +206,12 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
     settings.showAppliedAt ? `**Adjusted at:** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}` : '',
   ].filter(Boolean).join('\n');
   const blocks = [
+    // Which adjustment this undoes is the whole point of an undo, so it is
+    // stated outright rather than left to be inferred from the note.
+    ...(undoes ? [{
+      charCount: undoes.length + 12,
+      elements: [markdownElement(`**Undoes:** ${markdown(undoes)}`)],
+    }] : []),
     ...(settings.showReason ? [{
       charCount: markdown(adjustment.reason).length + 12,
       elements: [markdownElement(`**Reason:** ${markdown(adjustment.reason)}`)],
@@ -225,10 +234,10 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
     card: {
       config: { wide_screen_mode: true },
       header: {
-        template: settings.headerColour,
+        template: undoes ? settings.reversalColour : settings.headerColour,
         title: {
           tag: 'plain_text',
-          content: `${settings.title.replace(/\{number\}/g, number)}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ''}`,
+          content: `${(undoes ? settings.reversalTitle : settings.title).replace(/\{number\}/g, number)}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ''}`,
         },
       },
       elements: [
@@ -245,6 +254,93 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
       ],
     },
   }));
+}
+
+// Two ways a submission fails, and they need different instructions:
+//   rejected — Shopify refused it, stock is untouched, the draft can be fixed
+//   unknown  — the request went out with no answer, so it may or may not have
+//              landed; retrying is safe because the idempotency key is reused
+export const FAILURE_KINDS = {
+  rejected: {
+    outcome: '**Stock was not changed.** The adjustment went back to draft.',
+    action: 'Someone needs to open it, check the quantities and submit again.',
+  },
+  unknown: {
+    outcome: '**Shopify did not confirm the result**, so the stock may or may not have changed.',
+    action: 'Open the adjustment and press retry — it is safe, it cannot apply twice.',
+  },
+};
+
+export function buildAdjustmentFailureMessage(adjustment, options = {}) {
+  const settings = normalizeLarkSettings(options.settings || DEFAULT_LARK_SETTINGS);
+  const kind = FAILURE_KINDS[options.kind] ? options.kind : 'rejected';
+  const { outcome, action } = FAILURE_KINDS[kind];
+  const number = shortAdjustmentNumber(adjustment);
+  const lines = Array.isArray(adjustment.lines) ? adjustment.lines : [];
+  const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
+  const elements = [
+    markdownElement(outcome),
+    alignedColumns('**Reason given by Shopify:**', markdown(options.error)),
+    markdownElement([
+      `**Adjustment:** ${markdown(number)}`,
+      `**Products:** ${lines.length}`,
+      `**Recorded by:** ${markdown(adjustment.recorded_by?.name)}`,
+    ].join('\n')),
+    markdownElement(action),
+  ];
+  return {
+    msg_type: 'interactive',
+    card: {
+      config: { wide_screen_mode: true },
+      header: {
+        template: settings.failureColour,
+        title: {
+          tag: 'plain_text',
+          content: settings.failureTitle.replace(/\{number\}/g, number),
+        },
+      },
+      elements: url ? [...elements, {
+        tag: 'action',
+        actions: [{
+          tag: 'button',
+          text: { tag: 'plain_text', content: 'Open the adjustment' },
+          type: 'primary',
+          url,
+        }],
+      }] : elements,
+    },
+  };
+}
+
+// Announced once per distinct error: retrying a stubbornly failing adjustment
+// must not fill the group with the same warning.
+export async function notifyFailedAdjustmentOnce(adjustment, options = {}) {
+  const config = options.config ?? await loadLarkConfig();
+  if (config.settings.enabled === false) return { sent: false, disabled: true };
+  if (config.settings.notifyOnFailure === false) return { sent: false, disabled: true };
+  const webhookUrl = options.webhookUrl ?? config.webhookUrl;
+  if (!webhookUrl || !adjustment?.id) return { configured: false, sent: false };
+  const error = String(options.error || '').slice(0, 1000);
+
+  const claimed = await q(
+    `UPDATE adjustments
+     SET lark_failure_notified_error=$2, lark_failure_notified_at=now()
+     WHERE id=$1 AND lark_failure_notified_error IS DISTINCT FROM $2
+     RETURNING id`,
+    [Number(adjustment.id), error],
+  );
+  if (!claimed.rowCount) return { sent: false, alreadySent: true };
+
+  await postLarkMessage({
+    webhookUrl,
+    secret: options.secret ?? config.secret ?? '',
+    payload: buildAdjustmentFailureMessage(adjustment, {
+      ...options, settings: options.settings ?? config.settings,
+    }),
+    fetchImpl: options.fetchImpl,
+    now: options.now,
+  });
+  return { sent: true };
 }
 
 export function larkWebhookSignature(secret, timestamp) {
@@ -358,7 +454,8 @@ export async function notifyAppliedAdjustmentOnce(adjustment, options = {}) {
         );
       }
       await q(
-        `UPDATE adjustments SET lark_notified_at=now(), lark_notify_error=NULL
+        `UPDATE adjustments SET lark_notified_at=now(), lark_notify_error=NULL,
+                lark_failure_notified_error=NULL
          WHERE id=$1`,
         [Number(adjustment.id)],
       );

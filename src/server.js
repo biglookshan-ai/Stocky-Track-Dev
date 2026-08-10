@@ -65,7 +65,9 @@ import {
 } from './sales-history.js';
 import {
   notifyAppliedAdjustmentOnce,
+  notifyFailedAdjustmentOnce,
   buildAdjustmentNotificationMessages,
+  buildAdjustmentFailureMessage,
   postLarkMessage,
   shouldNotifyAdjustment,
 } from './lark-adjustment-notifier.js';
@@ -698,7 +700,23 @@ api.post('/adjustments/:id/apply', async (req, res) => {
       result.larkNotification = { sent: false, skippedByUser: true };
     }
     res.json(result);
-  } catch (e) { res.status(409).json({ error: e.message }); }
+  } catch (e) {
+    // The person who clicked sees this on screen, but nobody else would — tell
+    // the group too. A notification problem must not mask the real failure.
+    if (shouldNotifyAdjustment(req.body)) {
+      try {
+        const adjustment = await getAdjustment(req.params.id);
+        if (adjustment) {
+          await notifyFailedAdjustmentOnce(adjustment, {
+            error: e.message, kind: e.failureKind || 'rejected',
+          });
+        }
+      } catch (error) {
+        console.error(`[lark] adjustment ${req.params.id} failure notice not sent:`, error.message);
+      }
+    }
+    res.status(409).json({ error: e.message });
+  }
 });
 
 api.post('/adjustments/:id/notify-lark', async (req, res) => {
@@ -773,6 +791,17 @@ async function buildLarkPreview(settings) {
     };
   return {
     messages: buildAdjustmentNotificationMessages(adjustment, { settings }),
+    // Same adjustment shown as an undo and as a failure, so all three cards can
+    // be compared side by side without having to cause a real failure.
+    reversal: buildAdjustmentNotificationMessages(
+      { ...adjustment, reversal_of: { display_number: 'A0009-260808' } },
+      { settings },
+    ),
+    failure: buildAdjustmentFailureMessage(adjustment, {
+      settings,
+      kind: 'rejected',
+      error: 'Quantity has changed since this adjustment was created (expected 15, found 12)',
+    }),
     sample: !recent.rowCount,
   };
 }

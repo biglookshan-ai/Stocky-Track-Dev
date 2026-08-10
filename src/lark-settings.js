@@ -15,6 +15,15 @@ export const DEFAULT_LARK_SETTINGS = {
   enabled: true,
   title: '✅ Stock adjustment applied · {number}',
   headerColour: 'green',
+  // An undo is still an adjustment, but reads very differently in a group chat,
+  // so it gets its own heading rather than looking like a fresh change.
+  reversalTitle: '↩️ Adjustment undone · {number}',
+  reversalColour: 'orange',
+  // A failed submission is the one case nobody else finds out about — the
+  // person who clicked sees it on screen and may simply close the tab.
+  notifyOnFailure: true,
+  failureTitle: '⚠️ Stock adjustment failed · {number}',
+  failureColour: 'red',
   showReason: true,
   showNotes: true,
   showLines: true,
@@ -37,15 +46,17 @@ export function normalizeLarkSettings(input = {}) {
   for (const field of BOOLEAN_FIELDS) {
     if (input[field] !== undefined) settings[field] = input[field] !== false;
   }
-  if (input.title !== undefined) {
-    const title = String(input.title).replace(/[\r\n]+/g, ' ').trim().slice(0, 120);
+  for (const field of ['title', 'reversalTitle', 'failureTitle']) {
+    if (input[field] === undefined) continue;
+    const title = String(input[field]).replace(/[\r\n]+/g, ' ').trim().slice(0, 120);
     if (!title) throw new Error('通知标题不能为空');
-    settings.title = title;
+    settings[field] = title;
   }
-  if (input.headerColour !== undefined) {
-    const colour = String(input.headerColour).trim().toLowerCase();
+  for (const field of ['headerColour', 'reversalColour', 'failureColour']) {
+    if (input[field] === undefined) continue;
+    const colour = String(input[field]).trim().toLowerCase();
     if (!HEADER_COLOURS.includes(colour)) throw new Error('通知标题颜色无效');
-    settings.headerColour = colour;
+    settings[field] = colour;
   }
   return settings;
 }

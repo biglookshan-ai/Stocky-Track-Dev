@@ -610,7 +610,11 @@ export async function applyAdjustment({ id, ctx, staffId }) {
   } catch (error) {
     await q('UPDATE adjustments SET apply_error=$2, updated_at=now() WHERE id=$1',
       [adjustmentId, error.message]).catch(() => {});
-    throw new Error(`Shopify 请求状态未知，可安全重试：${error.message}`);
+    // The request left but no answer came back: the stock may or may not have
+    // moved. Callers tell this apart from an outright refusal via failureKind.
+    const unknown = new Error(`Shopify 请求状态未知，可安全重试：${error.message}`);
+    unknown.failureKind = 'unknown';
+    throw unknown;
   }
   const payload = data.inventoryAdjustQuantities;
   if (payload.userErrors?.length) {
@@ -622,9 +626,15 @@ export async function applyAdjustment({ id, ctx, staffId }) {
        WHERE id=$1`,
       [adjustmentId, message, idempotencyKey()],
     );
-    throw new Error(message);
+    const rejected = new Error(message);
+    rejected.failureKind = 'rejected';
+    throw rejected;
   }
-  if (!payload.inventoryAdjustmentGroup?.id) throw new Error('Shopify 没有返回调整记录');
+  if (!payload.inventoryAdjustmentGroup?.id) {
+    const empty = new Error('Shopify 没有返回调整记录');
+    empty.failureKind = 'unknown';
+    throw empty;
+  }
   await finalizeApply(adjustmentId, payload.inventoryAdjustmentGroup);
   return { alreadyApplied: false, adjustment: await getAdjustment(adjustmentId) };
 }
