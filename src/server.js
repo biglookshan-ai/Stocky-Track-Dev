@@ -1659,17 +1659,9 @@ api.post('/alerts/:id/resolve', async (req, res) => {
 
 app.use('/api', api);
 
-// Clean SPA routes are real URLs so Shopify App Bridge can mirror them in the
-// top-level Admin URL and browser back/forward can restore the correct page.
-// Serve the same shell on direct loads and refreshes; API and static routes
-// above keep their normal behavior.
-app.get([
-  '/dashboard',
-  '/items', '/items/:id',
-  '/history', '/history/:id',
-  '/adjustments', '/adjustments/new', '/adjustments/:id', '/adjustments/:id/edit',
-  '/search', '/system', '/virtual-stock', '/local-items',
-], sendIndex);
+// Serve the same shell on direct loads and refreshes of every SPA route; API
+// and static routes above keep their normal behavior.
+app.get(SPA_ROUTES, sendIndex);
 
 // ---- Scheduler ----
 // Webhook processing every 5s; provisional cleanup after processed events;
