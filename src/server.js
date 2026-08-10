@@ -60,6 +60,8 @@ import {
 } from './sales-history.js';
 import {
   notifyAppliedAdjustmentOnce,
+  buildAdjustmentNotificationMessages,
+  postLarkMessage,
   shouldNotifyAdjustment,
 } from './lark-adjustment-notifier.js';
 
@@ -704,6 +706,90 @@ api.post('/adjustments/:id/notify-lark', async (req, res) => {
       return res.status(409).json({ error: '尚未配置 Lark 群机器人 Webhook' });
     }
     res.json({ notification, adjustment: await getAdjustment(req.params.id) });
+  } catch (e) { res.status(502).json({ error: e.message }); }
+});
+
+// ---- Lark notification settings ----
+// The webhook URL is never sent back in full (it embeds the bot token); the
+// browser gets a masked copy for recognition and posts a new URL to replace it.
+api.get('/lark-settings', async (req, res) => {
+  try {
+    const config = await loadLarkConfig();
+    res.json({
+      settings: config.settings,
+      webhookUrlMasked: maskWebhookUrl(config.webhookUrl),
+      hasWebhook: Boolean(config.webhookUrl),
+      hasSecret: Boolean(config.secret),
+      source: config.source,
+      colours: HEADER_COLOURS,
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+api.put('/lark-settings', async (req, res) => {
+  try {
+    const config = await saveLarkConfig({
+      settings: req.body?.settings,
+      webhookUrl: req.body?.webhookUrl,
+      secret: req.body?.secret,
+    });
+    res.json({
+      settings: config.settings,
+      webhookUrlMasked: maskWebhookUrl(config.webhookUrl),
+      hasWebhook: Boolean(config.webhookUrl),
+      hasSecret: Boolean(config.secret),
+      source: config.source,
+    });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Preview renders the card that WOULD be sent, from the settings currently in
+// the form — one card builder, so the preview cannot drift from the real thing.
+// It uses the most recent applied adjustment when there is one, so the preview
+// shows real products rather than invented ones.
+async function buildLarkPreview(settings) {
+  const recent = await q(
+    `SELECT id FROM adjustments WHERE status='applied' ORDER BY applied_at DESC NULLS LAST LIMIT 1`);
+  const adjustment = recent.rowCount
+    ? await getAdjustment(recent.rows[0].id)
+    : {
+      id: 0,
+      display_number: 'A0001-260810',
+      reason: 'Manual adjustment',
+      notes: 'Sample note — this is what a note looks like in the card.',
+      applied_at: new Date().toISOString(),
+      recorded_by: { name: 'Sample staff' },
+      handled_by: [{ name: 'Sample staff' }],
+      lines: [{
+        product_title: 'Sample product', variant_title: 'Black',
+        barcode: '5060000000000', sku: 'SAMPLE-01', location: 'CineGearPro Shop',
+        delta: 2, qty_before: 3, qty_after: 5,
+      }],
+    };
+  return {
+    messages: buildAdjustmentNotificationMessages(adjustment, { settings }),
+    sample: !recent.rowCount,
+  };
+}
+
+api.post('/lark-settings/preview', async (req, res) => {
+  try {
+    res.json(await buildLarkPreview(normalizeLarkSettings(req.body?.settings || {})));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// Sends one real message to the configured group so the wording and layout can
+// be checked without applying an adjustment.
+api.post('/lark-settings/test', async (req, res) => {
+  try {
+    const config = await loadLarkConfig();
+    if (!config.webhookUrl) return res.status(409).json({ error: '尚未配置 Lark 群机器人 Webhook' });
+    const settings = normalizeLarkSettings(req.body?.settings || config.settings);
+    const { messages } = await buildLarkPreview(settings);
+    for (const message of messages) {
+      await postLarkMessage({ webhookUrl: config.webhookUrl, secret: config.secret, payload: message });
+    }
+    res.json({ sent: messages.length });
   } catch (e) { res.status(502).json({ error: e.message }); }
 });
 

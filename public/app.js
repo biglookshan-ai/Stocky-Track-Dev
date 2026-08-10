@@ -43,7 +43,7 @@ const parentRoute = (pathname = location.pathname) => {
   if (/^\/items\/\d+$/.test(path)) return '/items';
   if (/^\/history\/\d+$/.test(path)) return '/history';
   if (/^\/adjustments\/\d+$/.test(path) || path === '/adjustments/new') return '/adjustments';
-  if (path === '/virtual-stock') return '/adjustments';
+  if (path === '/virtual-stock' || path === '/lark-settings') return '/adjustments';
   if (path === '/local-items') return '/items';
   if (['/items', '/history', '/adjustments', '/search', '/system'].includes(path)) return '/dashboard';
   return null;
@@ -634,6 +634,180 @@ async function viewVirtualStock(params = routeParams()) {
     };
   };
   await render();
+}
+
+// Renders the very card JSON the notifier produces, so what is shown here
+// cannot drift from what Lark receives. Only the handful of Lark markdown
+// features the card builder actually emits are supported.
+const larkMd = (value) => esc(String(value ?? ''))
+  .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+  .replace(/&lt;font color=&#039;?(\w+)&#039;?&gt;([\s\S]*?)&lt;\/font&gt;/g, '<span class="lk-$1">$2</span>')
+  .replace(/&lt;font color='(\w+)'&gt;([\s\S]*?)&lt;\/font&gt;/g, '<span class="lk-$1">$2</span>')
+  .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  .replace(/\n/g, '<br>');
+const larkElement = (element) => {
+  if (element.tag === 'div') return `<div class="lk-line">${larkMd(element.text?.content)}</div>`;
+  if (element.tag === 'column_set') {
+    const [label, body] = element.columns || [];
+    return `<div class="lk-cols"><div class="lk-label">${larkMd(label?.elements?.[0]?.text?.content)}</div>
+      <div class="lk-body">${larkMd(body?.elements?.[0]?.text?.content)}</div></div>`;
+  }
+  if (element.tag === 'action') {
+    return `<div class="lk-actions">${(element.actions || []).map((action) =>
+      `<span class="lk-button">${esc(action.text?.content)}</span>`).join('')}</div>`;
+  }
+  return '';
+};
+const larkCard = (message) => `<div class="lark-card">
+  <div class="lark-card-header lk-head-${esc(message.card.header.template)}">${esc(message.card.header.title.content)}</div>
+  <div class="lark-card-body">${(message.card.elements || []).map(larkElement).join('')}</div>
+</div>`;
+
+async function viewLarkSettings() {
+  app.innerHTML = `<div class="card">${t('加载中…')}</div>`;
+  const config = await api('/lark-settings');
+  const settings = { ...config.settings };
+  const FIELDS = [
+    ['showReason', t('调整原因'), t('这张单为什么调整,比如 Damaged、Manual stock count')],
+    ['showNotes', t('备注'), t('提交时写的说明文字')],
+    ['showLines', t('商品明细'), t('关掉就只发一条摘要,不列具体商品')],
+    ['showBarcode', t('Barcode'), t('可点击直达 Shopify 后台该变体'), 'showLines'],
+    ['showSku', t('SKU'), '', 'showLines'],
+    ['showLocation', t('仓位'), t('这次调整发生在哪个仓库'), 'showLines'],
+    ['showBeforeAfter', t('调整前 / 调整后数量'), t('关掉只显示变化量,如 +5'), 'showLines'],
+    ['showRecordedBy', t('记录员工'), ''],
+    ['showHandledBy', t('经手员工'), ''],
+    ['showAppliedAt', t('调整时间'), ''],
+    ['showDetailButton', t('「查看完整调整单」按钮'), t('点击回到本 app 的调整单页面')],
+  ];
+  app.innerHTML = `
+    <div class="page-heading"><div><h1>${t('Lark 通知设置')}</h1><p class="muted">${t('调整单提交后发到 Lark 群的消息。改动即时预览,满意后保存;群消息固定用英文。')}</p></div></div>
+    <div class="lark-settings-layout">
+      <div>
+        <div class="card">
+          <h2>${t('发到哪个群')}</h2>
+          <label class="active-toggle"><input type="checkbox" id="lark-enabled" ${settings.enabled ? 'checked' : ''}> ${t('启用调整单通知')}</label>
+          <p class="muted small">${config.hasWebhook
+            ? t('当前群机器人：{url}（{source}）', {
+              url: esc(config.webhookUrlMasked),
+              source: config.source === 'app' ? t('在本页设置') : t('来自服务器配置'),
+            })
+            : t('尚未设置群机器人,通知不会发送。')}</p>
+          <label class="field"><span>${t('群机器人 Webhook 地址')}</span>
+            <input type="text" id="lark-url" placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/…">
+          </label>
+          <p class="muted small">${t('在 Lark 群 → 设置 → 群机器人 → 添加「自定义机器人」,复制 Webhook 地址粘贴到这里。留空表示不改动现有地址。')}</p>
+          <label class="field"><span>${t('签名密钥（可选）')}</span>
+            <input type="text" id="lark-secret" placeholder="${config.hasSecret ? t('已设置,留空表示不改动') : t('机器人若开启签名校验才需要')}">
+          </label>
+        </div>
+        <div class="card">
+          <h2>${t('卡片外观')}</h2>
+          <label class="field"><span>${t('标题')}</span>
+            <input type="text" id="lark-title" value="${esc(settings.title)}" maxlength="120">
+          </label>
+          <p class="muted small">${t('{number} 会替换成调整单号,如 A0042。')}</p>
+          <label class="field"><span>${t('标题栏颜色')}</span>
+            <select id="lark-colour">${(config.colours || []).map((colour) =>
+              `<option value="${colour}" ${settings.headerColour === colour ? 'selected' : ''}>${t(colour)}</option>`).join('')}</select>
+          </label>
+        </div>
+        <div class="card">
+          <h2>${t('显示哪些内容')}</h2>
+          <div class="lark-field-list">${FIELDS.map(([key, label, hint, parent]) => `
+            <label class="lark-field ${parent ? 'nested' : ''}">
+              <input type="checkbox" data-field="${key}" ${settings[key] ? 'checked' : ''} ${parent ? `data-parent="${parent}"` : ''}>
+              <span><strong>${label}</strong>${hint ? `<em>${hint}</em>` : ''}</span>
+            </label>`).join('')}</div>
+        </div>
+        <div class="card">
+          <div class="button-group">
+            <button id="lark-save">${t('保存设置')}</button>
+            <button id="lark-test" class="secondary" ${config.hasWebhook ? '' : 'disabled'}>${t('发一条测试消息')}</button>
+            <span id="lark-status" class="muted small"></span>
+          </div>
+          <p class="muted small">${t('测试消息会真的发到群里,用的是下面预览的内容。')}</p>
+        </div>
+      </div>
+      <div class="card lark-preview-card">
+        <h2>${t('群消息预览')}</h2>
+        <p class="muted small" id="lark-preview-note"></p>
+        <div id="lark-preview">${t('加载中…')}</div>
+      </div>
+    </div>`;
+
+  const readForm = () => {
+    const next = { ...settings, enabled: $('#lark-enabled').checked };
+    document.querySelectorAll('[data-field]').forEach((box) => { next[box.dataset.field] = box.checked; });
+    next.title = $('#lark-title').value.trim() || settings.title;
+    next.headerColour = $('#lark-colour').value;
+    return next;
+  };
+  const syncNested = () => {
+    document.querySelectorAll('[data-parent]').forEach((box) => {
+      const parent = document.querySelector(`[data-field="${box.dataset.parent}"]`);
+      box.closest('.lark-field').classList.toggle('disabled', !parent.checked);
+      box.disabled = !parent.checked;
+    });
+  };
+  let previewTimer = null;
+  const renderPreview = async () => {
+    const generation = currentNav();
+    try {
+      const { messages, sample } = await api('/lark-settings/preview', {
+        method: 'POST', body: JSON.stringify({ settings: readForm() }),
+      });
+      if (!isCurrent(generation)) return;
+      $w('#lark-preview-note').textContent = sample
+        ? t('还没有已提交的调整单,下面用示例商品演示。')
+        : t('用你最近一张已提交的调整单演示。');
+      $w('#lark-preview').innerHTML = messages.map(larkCard).join('');
+    } catch (error) {
+      $w('#lark-preview').innerHTML = `<p class="error">${esc(error.message)}</p>`;
+    }
+  };
+  const schedulePreview = () => {
+    syncNested();
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(renderPreview, 250);
+  };
+  document.querySelectorAll('[data-field], #lark-colour, #lark-enabled').forEach((input) => {
+    input.onchange = schedulePreview;
+  });
+  $('#lark-title').addEventListener('input', schedulePreview);
+
+  const status = (message, isError = false) => {
+    const node = $w('#lark-status');
+    node.textContent = message;
+    node.className = isError ? 'error small' : 'muted small';
+  };
+  $('#lark-save').onclick = async (event) => {
+    event.target.disabled = true;
+    status(t('保存中…'));
+    try {
+      const body = { settings: readForm() };
+      const url = $('#lark-url').value.trim();
+      const secret = $('#lark-secret').value.trim();
+      if (url) body.webhookUrl = url;
+      if (secret) body.secret = secret;
+      await api('/lark-settings', { method: 'PUT', body: JSON.stringify(body) });
+      await viewLarkSettings();
+    } catch (error) { status(t('保存失败：{msg}', { msg: error.message }), true); event.target.disabled = false; }
+  };
+  $('#lark-test').onclick = async (event) => {
+    if (!confirm(t('这会真的往 Lark 群发一条消息,是否继续？'))) return;
+    event.target.disabled = true;
+    status(t('发送中…'));
+    try {
+      const { sent } = await api('/lark-settings/test', {
+        method: 'POST', body: JSON.stringify({ settings: readForm() }),
+      });
+      status(t('已发送 {n} 条,请到群里查看。', { n: sent }));
+    } catch (error) { status(t('发送失败：{msg}', { msg: error.message }), true); }
+    event.target.disabled = false;
+  };
+  syncNested();
+  await renderPreview();
 }
 
 async function viewLocalItems(params = routeParams()) {
@@ -1423,7 +1597,7 @@ async function viewAdjustments(params = routeParams()) {
   app.innerHTML = `
     <div class="page-heading">
       <div><h1>${t('库存调整')}</h1><p class="muted">${t('建立可审核的 Draft，并在确认后写入 Shopify Available 库存。')}</p></div>
-      <div class="button-group"><a class="button secondary" href="/virtual-stock">${t('虚拟库存管理')}</a><button id="adjustments-export" class="secondary">${t('导出 CSV')}</button><a class="button" href="/adjustments/new">${t('新建调整')}</a></div>
+      <div class="button-group"><a class="button secondary" href="/lark-settings">${t('Lark 通知设置')}</a><a class="button secondary" href="/virtual-stock">${t('虚拟库存管理')}</a><button id="adjustments-export" class="secondary">${t('导出 CSV')}</button><a class="button" href="/adjustments/new">${t('新建调整')}</a></div>
     </div>
     <div class="card">
       <div class="adjustment-filters">
@@ -2162,7 +2336,8 @@ async function route() {
         : path.startsWith('/search') ? t('搜索')
           : path.startsWith('/system') ? t('系统状态')
             : path.startsWith('/virtual-stock') ? t('虚拟库存')
-              : t('首页');
+              : path.startsWith('/lark-settings') ? t('Lark 通知设置')
+                : t('首页');
   document.title = `${sectionTitle} · Inventory`;
   syncNavigationControls();
   try {
@@ -2177,6 +2352,7 @@ async function route() {
     if (path === '/adjustments/new') return await viewAdjustmentForm();
     if (path === '/search') return await viewSearch(params.get('q') || '');
     if (path === '/virtual-stock') return await viewVirtualStock(params);
+    if (path === '/lark-settings') return await viewLarkSettings();
     if (path === '/local-items') return await viewLocalItems(params);
     if (path === '/items') return await viewItems(params);
     if (path === '/history') return await viewHistory(params);

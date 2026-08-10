@@ -565,3 +565,36 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .virtual-stock-table col.w-n { width: 82px; }
 .virtual-stock-table col.w-date { width: 92px; }
 .virtual-stock-table .row-dim td { opacity: .55; }
+
+/* ---- Lark notification settings ---- */
+.lark-settings-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); gap: 14px; align-items: start; }
+.lark-settings-layout > div > .card:last-child { margin-bottom: 0; }
+.lark-preview-card { position: sticky; top: 60px; }
+.field { display: block; margin: 10px 0 4px; }
+.field span { display: block; color: var(--sub); font-size: var(--fs-sm); margin-bottom: 4px; }
+.field input, .field select { width: 100%; }
+.lark-field-list { display: grid; gap: 2px; }
+.lark-field { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; border-radius: 7px; }
+.lark-field:hover { background: var(--bg); }
+.lark-field.nested { margin-left: 22px; }
+.lark-field.disabled { opacity: .45; }
+.lark-field strong { display: block; font-weight: var(--fw-medium); }
+.lark-field em { display: block; font-style: normal; color: var(--sub); font-size: var(--fs-xs); line-height: 1.4; }
+.lark-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 12px; background: #fff; }
+.lark-card-header { padding: 9px 13px; color: #fff; font-weight: var(--fw-medium); font-size: var(--fs-md); }
+.lk-head-green { background: #34a853; } .lk-head-blue { background: #3370ff; }
+.lk-head-turquoise { background: #14c0c0; } .lk-head-orange { background: #ff8800; }
+.lk-head-red { background: #f54a45; } .lk-head-grey { background: #8f959e; }
+.lark-card-body { padding: 11px 13px; font-size: var(--fs-md); line-height: 1.6; }
+.lk-line { margin-bottom: 7px; word-break: break-word; }
+.lk-cols { display: flex; gap: 7px; margin-bottom: 7px; align-items: flex-start; }
+.lk-cols .lk-label { flex: 0 0 auto; white-space: nowrap; }
+.lk-cols .lk-body { flex: 1 1 auto; min-width: 0; word-break: break-word; }
+.lk-green { color: #34a853; } .lk-red { color: #f54a45; } .lk-grey { color: var(--sub); }
+.lark-card-body a { color: var(--blue); }
+.lk-actions { margin-top: 10px; }
+.lk-button { display: inline-block; padding: 5px 14px; border-radius: 6px; background: #3370ff; color: #fff; font-size: var(--fs-sm); }
+@media (max-width: 1000px) {
+  .lark-settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .lark-preview-card { position: static; }
+}

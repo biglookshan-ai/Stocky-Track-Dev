@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { q, withLock } from './db.js';
+import { DEFAULT_LARK_SETTINGS, normalizeLarkSettings, loadLarkConfig } from './lark-settings.js';
 
 const DEFAULT_MAX_MESSAGE_CHARS = 7000;
 const DEFAULT_TIME_ZONE = 'Europe/London';
@@ -115,12 +116,24 @@ function alignedColumns(label, content) {
   };
 }
 
-function adjustmentLineBlock(adjustment, line, index, configuredShop) {
+function adjustmentLineBlock(adjustment, line, index, configuredShop, settings) {
+  const codes = [
+    settings.showBarcode ? `Barcode: ${barcodeMarkdown(adjustment, line, configuredShop)}` : '',
+    settings.showSku ? `SKU: ${markdown(line.sku)}` : '',
+  ].filter(Boolean).join(' | ');
+  const movement = [
+    settings.showLocation ? markdown(line.location) : '',
+    [
+      `Change: ${changeMarkdown(line.delta)}`,
+      settings.showBeforeAfter ? `Before: **${quantity(line.qty_before)}**` : '',
+      settings.showBeforeAfter ? `After: **${quantity(line.qty_after)}**` : '',
+    ].filter(Boolean).join(' · '),
+  ].filter(Boolean).join(' | ');
   const content = [
-    `**${markdown(line.product_title, '(无标题)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
-    `Barcode：${barcodeMarkdown(adjustment, line, configuredShop)} | SKU：${markdown(line.sku)}`,
-    `${markdown(line.location)} | Change：${changeMarkdown(line.delta)} · Before：**${quantity(line.qty_before)}** · After：**${quantity(line.qty_after)}**`,
-  ].join('\n');
+    `**${markdown(line.product_title, '(no title)')}${line.variant_title ? ` / ${markdown(line.variant_title)}` : ''}**`,
+    codes,
+    movement,
+  ].filter(Boolean).join('\n');
   return {
     charCount: content.length + String(index).length + 2,
     elements: [alignedColumns(`${index}.`, content)],
@@ -167,35 +180,43 @@ function detailUrl(adjustment, appUrl) {
 }
 
 export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
+  const settings = normalizeLarkSettings(options.settings || DEFAULT_LARK_SETTINGS);
   const maxChars = Math.max(1000, Number(options.maxChars || DEFAULT_MAX_MESSAGE_CHARS));
   const timeZone = options.timeZone || process.env.TZ || DEFAULT_TIME_ZONE;
   const configuredShop = options.shop || process.env.SHOP;
   const number = shortAdjustmentNumber(adjustment);
-  const lines = Array.isArray(adjustment.lines) ? adjustment.lines : [];
+  const lines = settings.showLines && Array.isArray(adjustment.lines) ? adjustment.lines : [];
   const recordedBy = markdown(adjustment.recorded_by?.name);
-  const handledBy = markdown(adjustment.handled_by?.map((person) => person.name).filter(Boolean).join('、'));
-  const url = detailUrl(adjustment, options.appUrl || process.env.APP_URL);
+  const handledBy = markdown(adjustment.handled_by?.map((person) => person.name).filter(Boolean).join(', '));
+  const url = settings.showDetailButton
+    ? detailUrl(adjustment, options.appUrl || process.env.APP_URL)
+    : '';
 
   const note = markdown(adjustment.notes).replace(/\r\n?/g, '\n');
-  const noteChunks = splitLongSection(note, Math.max(500, maxChars - 100));
-  const detailHeading = lines.length ? '**调整明细：**' : '**调整明细：** —';
+  const noteChunks = settings.showNotes
+    ? splitLongSection(note, Math.max(500, maxChars - 100))
+    : [];
+  const detailHeading = lines.length ? '**Items:**' : '**Items:** —';
   const footer = [
-    `**记录员工：** ${recordedBy}`,
-    `**经手员工：** ${handledBy}`,
-    `**调整时间：** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}`,
-  ].join('\n');
+    settings.showRecordedBy ? `**Recorded by:** ${recordedBy}` : '',
+    settings.showHandledBy ? `**Handled by:** ${handledBy}` : '',
+    settings.showAppliedAt ? `**Adjusted at:** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}` : '',
+  ].filter(Boolean).join('\n');
   const blocks = [
-    {
-      charCount: markdown(adjustment.reason).length + 6,
-      elements: [markdownElement(`**原因：** ${markdown(adjustment.reason)}`)],
-    },
+    ...(settings.showReason ? [{
+      charCount: markdown(adjustment.reason).length + 12,
+      elements: [markdownElement(`**Reason:** ${markdown(adjustment.reason)}`)],
+    }] : []),
     ...noteChunks.map((chunk) => ({
       charCount: chunk.length + 6,
-      elements: [alignedColumns('**备注：**', chunk)],
+      elements: [alignedColumns('**Note:**', chunk)],
     })),
-    { charCount: detailHeading.length, elements: [markdownElement(detailHeading)] },
-    ...lines.map((line, index) => adjustmentLineBlock(adjustment, line, index + 1, configuredShop)),
-    { charCount: footer.length, elements: [markdownElement(footer)] },
+    ...(settings.showLines ? [
+      { charCount: detailHeading.length, elements: [markdownElement(detailHeading)] },
+      ...lines.map((line, index) =>
+        adjustmentLineBlock(adjustment, line, index + 1, configuredShop, settings)),
+    ] : []),
+    ...(footer ? [{ charCount: footer.length, elements: [markdownElement(footer)] }] : []),
   ];
 
   const pages = packElementBlocks(blocks, maxChars);
@@ -204,10 +225,10 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
     card: {
       config: { wide_screen_mode: true },
       header: {
-        template: 'green',
+        template: settings.headerColour,
         title: {
           tag: 'plain_text',
-          content: `✅ 库存调整已执行 · ${number}${pages.length > 1 ? `（${index + 1}/${pages.length}）` : ''}`,
+          content: `${settings.title.replace(/\{number\}/g, number)}${pages.length > 1 ? ` (${index + 1}/${pages.length})` : ''}`,
         },
       },
       elements: [
@@ -216,7 +237,7 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
           tag: 'action',
           actions: [{
             tag: 'button',
-            text: { tag: 'plain_text', content: '查看完整调整单' },
+            text: { tag: 'plain_text', content: 'View full adjustment' },
             type: 'primary',
             url,
           }],
@@ -292,7 +313,9 @@ export async function postLarkMessage({
 }
 
 export async function notifyAppliedAdjustmentOnce(adjustment, options = {}) {
-  const webhookUrl = options.webhookUrl ?? process.env.LARK_ADJUSTMENT_WEBHOOK_URL;
+  const config = options.config ?? await loadLarkConfig();
+  if (config.settings.enabled === false) return { configured: true, sent: false, disabled: true };
+  const webhookUrl = options.webhookUrl ?? config.webhookUrl;
   if (!webhookUrl) return { configured: false, sent: false };
   if (!adjustment?.id) throw new Error('调整单不完整，无法发送 Lark 通知');
 
@@ -308,7 +331,9 @@ export async function notifyAppliedAdjustmentOnce(adjustment, options = {}) {
       return { configured: true, sent: false, alreadySent: true };
     }
 
-    const messages = buildAdjustmentNotificationMessages(adjustment, options);
+    const messages = buildAdjustmentNotificationMessages(adjustment, {
+      ...options, settings: options.settings ?? config.settings,
+    });
     const startAt = Math.min(Number(state.rows[0].lark_notify_parts_sent || 0), messages.length);
     await q(
       `UPDATE adjustments
@@ -320,7 +345,7 @@ export async function notifyAppliedAdjustmentOnce(adjustment, options = {}) {
       for (let index = startAt; index < messages.length; index += 1) {
         await postLarkMessage({
           webhookUrl,
-          secret: options.secret ?? process.env.LARK_ADJUSTMENT_WEBHOOK_SECRET ?? '',
+          secret: options.secret ?? config.secret ?? '',
           payload: messages[index],
           fetchImpl: options.fetchImpl,
           now: options.now,

@@ -47,18 +47,18 @@ test('builds a complete adjustment notification', () => {
   const combined = JSON.stringify(messages);
   assert.equal(messages[0].msg_type, 'interactive');
   assert.equal(messages[0].card.header.template, 'green');
-  assert.equal(messages[0].card.header.title.content, '✅ 库存调整已执行 · A0042');
-  assert.match(combined, /\*\*原因：\*\* Manual adjustment/);
-  assert.match(combined, /\*\*备注：\*\*/);
+  assert.equal(messages[0].card.header.title.content, '✅ Stock adjustment applied · A0042');
+  assert.match(combined, /\*\*Reason:\*\* Manual adjustment/);
+  assert.match(combined, /\*\*Note:\*\*/);
   assert.match(combined, /客人取消订单，手动增加库存/);
-  assert.match(combined, /\*\*调整明细：\*\*/);
-  assert.match(combined, /\*\*记录员工：\*\* Kay/);
-  assert.match(combined, /\*\*经手员工：\*\* Chill、Shan/);
+  assert.match(combined, /\*\*Items:\*\*/);
+  assert.match(combined, /\*\*Recorded by:\*\* Kay/);
+  assert.match(combined, /\*\*Handled by:\*\* Chill, Shan/);
   assert.match(combined, /Product 1 \/ Variant 1/);
-  assert.match(combined, /Barcode：\[50000\]\(https:\/\/admin\.shopify\.com\/store\/test\/products\/15762296209786\/variants\/57102666269050\) \| SKU：SKU-0/);
-  assert.match(combined, /Change：<font color='green'>\*\*\+2\*\*<\/font> · Before：\*\*0\*\* · After：\*\*2\*\*/);
+  assert.match(combined, /Barcode: \[50000\]\(https:\/\/admin\.shopify\.com\/store\/test\/products\/15762296209786\/variants\/57102666269050\) \| SKU: SKU-0/);
+  assert.match(combined, /Change: <font color='green'>\*\*\+2\*\*<\/font> · Before: \*\*0\*\* · After: \*\*2\*\*/);
   assert.match(combined, /<font color='red'>\*\*-1\*\*<\/font>/);
-  assert.match(combined, /\*\*调整时间：\*\* 2026\/08\/03 11:00:00/);
+  assert.match(combined, /\*\*Adjusted at:\*\* 2026\/08\/03 11:00:00/);
   assert.equal(messages.at(-1).card.elements.at(-1).actions[0].url,
     'https://admin.shopify.com/store/test/apps/inventory/adjustments/42');
 });
@@ -69,7 +69,7 @@ test('indents every continuation line in a multi-line note', () => {
   const [message] = buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' });
   const note = message.card.elements.find((element) =>
     element.tag === 'column_set'
-      && element.columns[0].elements[0].text.content === '**备注：**');
+      && element.columns[0].elements[0].text.content === '**Note:**');
   assert.ok(note);
   assert.equal(note.columns[0].width, 'auto');
   assert.equal(note.columns[1].width, 'weighted');
@@ -87,7 +87,7 @@ test('keeps wrapped product titles and details in one aligned content column', (
   assert.equal(product.columns[0].width, 'auto');
   assert.equal(product.columns[1].width, 'weighted');
   assert.match(product.columns[1].elements[0].text.content,
-    /^\*\*A very long product title.*\*\*\nBarcode：/);
+    /^\*\*A very long product title.*\*\*\nBarcode: /);
 });
 
 test('Lark notification is enabled by default and only skips explicit false', () => {
@@ -101,7 +101,7 @@ test('keeps barcode as plain text when Shopify product identity is missing', () 
   const adjustment = sampleAdjustment(1);
   adjustment.lines[0].shopify_product_gid = null;
   const combined = JSON.stringify(buildAdjustmentNotificationMessages(adjustment, { timeZone: 'UTC' }));
-  assert.match(combined, /Barcode：50000 \| SKU：SKU-0/);
+  assert.match(combined, /Barcode: 50000 \| SKU: SKU-0/);
   assert.doesNotMatch(combined, /\/products\/15762296209786\/variants\//);
 });
 
@@ -115,9 +115,9 @@ test('splits long adjustments without dropping products', () => {
   for (let index = 0; index < adjustment.lines.length; index += 1) {
     assert.match(combined, new RegExp(`Product ${index + 1} \\/ Variant ${index + 1}`));
   }
-  assert.match(messages[0].card.header.title.content, /\uff081\//);
+  assert.match(messages[0].card.header.title.content, /\(1\//);
   assert.match(messages.at(-1).card.header.title.content,
-    new RegExp(`（${messages.length}\/${messages.length}）`));
+    new RegExp(`\\(${messages.length}/${messages.length}\\)`));
 });
 
 test('creates the Lark custom-bot signature', () => {
@@ -144,7 +144,7 @@ test('posts an interactive card and accepts Lark success responses', async () =>
   assert.equal(request.url, 'https://open.larksuite.com/open-apis/bot/v2/hook/test-id');
   const body = JSON.parse(request.options.body);
   assert.equal(body.msg_type, 'interactive');
-  assert.equal(body.card.header.title.content, '✅ 库存调整已执行 · A0042');
+  assert.equal(body.card.header.title.content, '✅ Stock adjustment applied · A0042');
   assert.equal(body.timestamp, '1722672000');
   assert.equal(body.sign, larkWebhookSignature('test-secret', '1722672000'));
 });
