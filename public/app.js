@@ -2221,8 +2221,6 @@ async function viewAdjustment(id) {
       <div class="button-group">${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">${t('编辑 Draft')}</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? t('安全重试提交') : t('提交到 Shopify')}</button>` : ''}
         ${canApply ? `<label class="notify-toggle" title="${t('取消勾选后只调整 Shopify，不发送 Lark 群通知')}"><input type="checkbox" id="notify-lark" checked><span>${t('通知')}</span></label>` : ''}
-        ${adjustment.status === 'applied' && !adjustment.reversed_by?.length && !adjustment.reversal_of ? `<button id="reverse-adjustment" class="quiet">${t('撤销这张调整单')}</button>` : ''}
-        ${['draft', 'applied'].includes(adjustment.status) ? `<button id="archive-adjustment" class="secondary">${t('归档')}</button>` : ''}
       </div></div>
     ${adjustment.reversal_of ? `<div class="notice"><strong>${t('这是一张撤销单。')}</strong>${t('它把 {number} 的调整数量原样反向抵消。', { number: `<a href="/adjustments/${adjustment.reversal_of.id}">${esc(adjustmentNumber(adjustment.reversal_of.number, adjustment.reversal_of.display_number))}</a>` })}</div>` : ''}
     ${adjustment.reversed_by?.length ? `<div class="notice"><strong>${t('这张调整单已被撤销。')}</strong>${t('撤销单：{numbers}', { numbers: adjustment.reversed_by.map((row) => `<a href="/adjustments/${row.id}">${esc(adjustmentNumber(row.number, row.display_number))}</a>${row.status === 'draft' ? `（${t('草稿，尚未提交')}）` : ''}`).join(listSep) })}</div>` : ''}
@@ -2255,7 +2253,11 @@ async function viewAdjustment(id) {
         </tr>`).join('') : `<tr><td colspan="6" class="muted">${t('此调整单没有商品明细（导入时商品无法识别）')}</td></tr>`}</tbody>
       </table></div>
     </div>
-    ${canApply ? `<div class="notice"><strong>${t('提交前确认：')}</strong>${t('这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。')}</div>` : ''}`;
+    ${canApply ? `<div class="notice"><strong>${t('提交前确认：')}</strong>${t('这一步会真实改变 Shopify Available 库存。系统会先核对最新数量；如库存已被其他订单、员工或 App 修改，提交会停止并要求重新确认。')}</div>` : ''}
+    <div class="page-footer-actions">
+      ${adjustment.status === 'applied' && !adjustment.reversed_by?.length && !adjustment.reversal_of ? `<button id="reverse-adjustment" class="quiet">${t('撤销这张调整单')}</button>` : ''}
+      ${['draft', 'applied'].includes(adjustment.status) ? `<button id="archive-adjustment" class="quiet">${t('归档')}</button>` : ''}
+    </div>`;
   await wireAttachmentActions(id, adjustment.attachments);
   if ($('#apply-adjustment')) $('#apply-adjustment').onclick = async (event) => {
     const notifyLark = $('#notify-lark')?.checked !== false;

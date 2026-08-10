@@ -620,3 +620,6 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
    rather than by being in a different card. */
 .adjustment-notes-card .adjustment-evidence { margin-top: 12px; padding-top: 10px; border-top: 1px solid #eee5c9; }
 .adjustment-notes-card .adjustment-evidence:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+/* End-of-life actions live at the bottom left, away from the everyday flow. */
+.page-footer-actions { display: flex; gap: 4px; margin: 4px 0 24px; }
+.page-footer-actions:empty { display: none; }
