@@ -202,7 +202,7 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const detailHeading = lines.length ? '**Items:**' : '**Items:** —';
   const footer = [
     settings.showRecordedBy ? `**Recorded by:** ${recordedBy}` : '',
-    settings.showHandledBy ? `**Handled by:** ${handledBy}` : '',
+    settings.showHandledBy ? `**Carried out by:** ${handledBy}` : '',
     settings.showAppliedAt ? `**Adjusted at:** ${formatAdjustmentTime(adjustment.applied_at, timeZone)}` : '',
   ].filter(Boolean).join('\n');
   const blocks = [

@@ -17,12 +17,12 @@ export const DEFAULT_LARK_SETTINGS = {
   headerColour: 'green',
   // An undo is still an adjustment, but reads very differently in a group chat,
   // so it gets its own heading rather than looking like a fresh change.
-  reversalTitle: '↩️ Adjustment undone · {number}',
+  reversalTitle: '❗ Adjustment undone · {number}',
   reversalColour: 'orange',
   // A failed submission is the one case nobody else finds out about — the
   // person who clicked sees it on screen and may simply close the tab.
   notifyOnFailure: true,
-  failureTitle: '⚠️ Stock adjustment failed · {number}',
+  failureTitle: '❌ Stock adjustment failed · {number}',
   failureColour: 'red',
   showReason: true,
   showNotes: true,

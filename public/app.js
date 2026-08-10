@@ -1543,7 +1543,7 @@ async function viewHistoryEvent(id) {
       <div><span>Adjustment</span><strong><a class="item-link" href="/adjustments/${adjustment.id}">${esc(adjustment.display_number || t('查看调整单'))}</a></strong></div>
       <div><span>Shopify account</span><strong>${esc(adjustment.login_account_name || '—')}</strong></div>
       <div><span>Recorded by</span><strong>${esc(adjustment.recorded_by_name || '—')}</strong></div>
-      <div><span>Handled by</span><strong>${esc(adjustment.handled_by_names || '—')}</strong></div>
+      <div><span>${t('经手员工')}</span><strong>${esc(adjustment.handled_by_names || '—')}</strong></div>
     </div>${adjustment.notes ? `<div class="notice"><strong>${t('Notes：')}</strong>${esc(adjustment.notes)}</div>` : ''}` : ''}
     <div class="card">
       <div class="card-heading"><div><h2>${t('涉及商品')}</h2><p class="muted compact">${t('共 {n} 个商品 / 仓位组合，Barcode 为主要识别编号。', { n: rows.length })}</p></div></div>
