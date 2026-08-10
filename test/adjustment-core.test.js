@@ -4,6 +4,7 @@ import {
   buildInventoryAdjustmentInput,
   csvCell,
   newAdjustmentDisplayNumber,
+  missingRequiredFields,
   normalizeAdjustmentInput,
   shopifyAdjustmentReason,
 } from '../src/adjustment-core.js';
@@ -18,13 +19,15 @@ test('normalizes a valid multi-line adjustment draft', () => {
     reasonId: '4',
     notes: '  cycle count  ',
     lines: [{ itemId: '10', delta: '-2' }, { itemId: 11, delta: 3 }],
+    recordedBy: { staffId: 3 },
+    handledBy: [{ staffId: 3 }],
   }), {
     locationId: 2,
     reasonId: 4,
     notes: 'cycle count',
     lines: [{ itemId: 10, delta: -2 }, { itemId: 11, delta: 3 }],
-    recordedBy: null,
-    handledBy: [],
+    recordedBy: { staffId: 3, name: '' },
+    handledBy: [{ staffId: 3, name: '' }],
   });
 });
 
@@ -66,13 +69,13 @@ test('sequence past 9999 keeps growing, date unaffected', () => {
 
 test('rejects zero, fractional and duplicate draft lines', () => {
   assert.throws(() => normalizeAdjustmentInput({
-    locationId: 1, reasonId: 1, lines: [{ itemId: 1, delta: 0 }],
+    locationId: 1, reasonId: 1, recordedBy: { staffId: 3 }, handledBy: [{ staffId: 3 }], lines: [{ itemId: 1, delta: 0 }],
   }), /非零整数/);
   assert.throws(() => normalizeAdjustmentInput({
-    locationId: 1, reasonId: 1, lines: [{ itemId: 1, delta: 1.5 }],
+    locationId: 1, reasonId: 1, recordedBy: { staffId: 3 }, handledBy: [{ staffId: 3 }], lines: [{ itemId: 1, delta: 1.5 }],
   }), /非零整数/);
   assert.throws(() => normalizeAdjustmentInput({
-    locationId: 1, reasonId: 1,
+    locationId: 1, reasonId: 1, recordedBy: { staffId: 3 }, handledBy: [{ staffId: 3 }],
     lines: [{ itemId: 1, delta: 1 }, { itemId: 1, delta: 2 }],
   }), /商品重复/);
 });
@@ -80,7 +83,7 @@ test('rejects zero, fractional and duplicate draft lines', () => {
 test('keeps detailed adjustment notes up to 10,000 characters', () => {
   const notes = 'x'.repeat(12000);
   const normalized = normalizeAdjustmentInput({
-    locationId: 1, reasonId: 1, notes, lines: [{ itemId: 1, delta: 1 }],
+    locationId: 1, reasonId: 1, notes, recordedBy: { staffId: 3 }, handledBy: [{ staffId: 3 }], lines: [{ itemId: 1, delta: 1 }],
   });
   assert.equal(normalized.notes.length, 10000);
 });
@@ -137,4 +140,26 @@ test('escapes CSV values without changing plain identifiers', () => {
   assert.equal(csvCell('540770'), '540770');
   assert.equal(csvCell('note, with "quote"'), '"note, with ""quote"""');
   assert.equal(csvCell('line 1\nline 2'), '"line 1\nline 2"');
+});
+
+test('every missing required field is reported at once, not one per attempt', () => {
+  assert.deepEqual(missingRequiredFields({}), [
+    '仓位 Location', '调整原因 Reason', '记录员工 Recorded by',
+    '经手员工 Handled by', '调整商品 Products',
+  ]);
+  assert.deepEqual(missingRequiredFields({
+    locationId: 1, reasonId: 2,
+    recordedBy: { staffId: 3 }, handledBy: [{ name: 'Temp' }],
+    lines: [{ itemId: 1, delta: 1 }],
+  }), []);
+  assert.throws(() => normalizeAdjustmentInput({ locationId: 1 }),
+    /请先填写：调整原因 Reason、记录员工 Recorded by、经手员工 Handled by、调整商品 Products/);
+});
+
+test('a person with neither an id nor a name does not satisfy the requirement', () => {
+  const base = { locationId: 1, reasonId: 1, lines: [{ itemId: 1, delta: 1 }], recordedBy: { staffId: 3 } };
+  assert.deepEqual(missingRequiredFields({ ...base, handledBy: [] }), ['经手员工 Handled by']);
+  assert.deepEqual(missingRequiredFields({ ...base, handledBy: [{ name: '   ' }] }), ['经手员工 Handled by']);
+  assert.deepEqual(missingRequiredFields({ ...base, handledBy: [{ staffId: 0, name: '' }] }), ['经手员工 Handled by']);
+  assert.deepEqual(missingRequiredFields({ ...base, handledBy: [{ staffId: 4 }] }), []);
 });

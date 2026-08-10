@@ -11,13 +11,26 @@ function normalizeParticipant(value, label) {
   return { staffId: normalizedStaffId, name };
 }
 
+// The fields every adjustment must carry to be a usable record. They are
+// reported together rather than one per attempt, so someone filling the form
+// finds out everything that is missing in one go.
+export function missingRequiredFields(input = {}) {
+  const named = (person) => Boolean(person && (Number(person.staffId) > 0 || String(person.name || '').trim()));
+  return [
+    Number.isInteger(Number(input.locationId)) && Number(input.locationId) > 0 ? '' : '仓位 Location',
+    Number.isInteger(Number(input.reasonId)) && Number(input.reasonId) > 0 ? '' : '调整原因 Reason',
+    named(input.recordedBy) ? '' : '记录员工 Recorded by',
+    Array.isArray(input.handledBy) && input.handledBy.some(named) ? '' : '经手员工 Handled by',
+    Array.isArray(input.lines) && input.lines.length ? '' : '调整商品 Products',
+  ].filter(Boolean);
+}
+
 export function normalizeAdjustmentInput(input = {}) {
+  const missing = missingRequiredFields(input);
+  if (missing.length) throw new Error(`请先填写：${missing.join('、')}`);
   const locationId = Number(input.locationId);
   const reasonId = Number(input.reasonId);
   const notes = String(input.notes || '').trim().slice(0, 10000);
-  if (!Number.isInteger(locationId) || locationId <= 0) throw new Error('请选择仓位');
-  if (!Number.isInteger(reasonId) || reasonId <= 0) throw new Error('请选择 Adjustment reason');
-  if (!Array.isArray(input.lines) || input.lines.length === 0) throw new Error('请至少添加一个商品');
   if (input.lines.length > MAX_LINES) throw new Error(`每张调整单最多 ${MAX_LINES} 个商品`);
 
   const seen = new Set();

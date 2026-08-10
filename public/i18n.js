@@ -127,6 +127,14 @@
     '提交失败时通知群里': 'Notify the group when a submission fails',
     '已关闭,失败时不会通知群里。': 'Switched off — failures are not announced in the group.',
 
+    '还有必填项没有填：': 'Still to fill in: ',
+    '仓位 Location': 'Location',
+    '调整原因 Reason': 'Reason',
+    '记录员工 Recorded by': 'Recorded by',
+    '经手员工 Handled by': 'Handled by',
+    '调整商品 Products': 'Products',
+    '请先填写：{fields}': 'Please fill in: {fields}',
+
     // ---- status help tooltips ----
     '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。': "Change records only show entries confirmed in Shopify's official history (with the person/app, reason and document). This number counts quantity changes still waiting for that official record — it usually arrives within minutes and posts automatically, and nothing incomplete is shown in the meantime.",
     '库存数字是实时的（变动信号一到就更新）。这里显示的是每天凌晨把全店所有商品与 Shopify 逐一核对的完成时间，是二次保险，不代表数字停留在该时刻。': 'Stock numbers are live (they update the moment a change signal arrives). This shows when the overnight full check against Shopify last finished — a second safety net, not the time the numbers are from.',
@@ -636,6 +644,8 @@
     [/^第 (\d+) 行调整数量过大$/, 'Row $1: that quantity is too large'],
     [/^第 (\d+) 位经手员工无效$/, 'Handled by #$1 is not valid'],
     [/^记录员工无效$/, 'The recorded staff member is not valid'],
+    [/^请先填写：(.+)$/, (match) =>
+      `Please fill in: ${match[1].split('、').map((field) => t(field.trim())).join(', ')}`],
     [/^商品 (\d+) 不存在$/, 'Product $1 no longer exists'],
     [/^商品 (\d+) 不支持 Shopify 库存调整$/, "Product $1 cannot have its stock adjusted in Shopify"],
     [/^商品 (\d+) 在该仓位没有可调整库存$/, 'Product $1 has no stock to adjust at this location'],
@@ -662,7 +672,9 @@
       else if (PATTERNS.some(([re, en]) => {
         const match = re.exec(source);
         if (!match) return false;
-        out = en.replace(/\$(\d)/g, (_, n) => match[Number(n)]);
+        out = typeof en === 'function'
+          ? en(match)
+          : en.replace(/\$(\d)/g, (_, n) => match[Number(n)]);
         return true;
       })) { /* translated by pattern */ }
       else if (/[一-鿿]/.test(source) && !missing.has(source)) {

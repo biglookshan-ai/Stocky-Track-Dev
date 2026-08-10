@@ -1848,14 +1848,14 @@ async function viewAdjustmentForm(id = null) {
     ${adjustment?.reversal_of ? `<div class="notice"><strong>${t('这是一张撤销单。')}</strong>${t('它把 {number} 的调整数量原样反向抵消。', { number: `<a href="/adjustments/${adjustment.reversal_of.id}">${esc(adjustmentNumber(adjustment.reversal_of.number, adjustment.reversal_of.display_number))}</a>` })}${t('改数量或删除商品只影响这张撤销单,原单不受影响。')}</div>` : ''}
     <div class="card adjustment-form">
       <div class="form-grid adjustment-basics">
-        <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
-        <label><span>Adjustment reason</span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
+        <label><span>Location <b class="req">*</b></span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
+        <label><span>Adjustment reason <b class="req">*</b></span><select id="draft-reason">${options.reasons.filter((reason) => reason.active || reason.id === adjustment?.reason_id).map((reason) => `<option value="${reason.id}" data-direction="${reason.direction}" ${reason.id === adjustment?.reason_id ? 'selected' : ''}>${esc(reason.name)}</option>`).join('')}</select></label>
         <div class="adjustment-people">
           <label><span>${t('Shopify 登录账号（自动识别）')}</span>
             <input type="text" readonly value="${esc(options.currentStaff?.display_name || t('无法识别'))}" title="Shopify user id: ${esc(options.currentStaff?.shopify_user_id || '')}">
             <span class="muted small">${t('多名员工可能共用此账号，因此下面的经办人需手动选择。')}</span>
           </label>
-          <label><span>${t('Recorded by（实际做记录的员工）')}</span>
+          <label><span>${t('Recorded by（实际做记录的员工）') + ' <b class="req">*</b>'}</span>
             <select id="draft-recorded">
               <option value="" ${!recordedIsCustom && !recordedStaffId ? 'selected' : ''}>${t('请选择员工…')}</option>
               ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}" ${!recordedIsCustom && Number(recordedStaffId) === person.id ? 'selected' : ''}>${esc(person.display_name)}</option>`).join('')}
@@ -1864,7 +1864,7 @@ async function viewAdjustmentForm(id = null) {
             <input id="draft-recorded-custom" type="text" maxlength="120" value="${recordedIsCustom ? esc(adjustment.recorded_by.name) : ''}" placeholder="${t('记录员工姓名')}" ${recordedIsCustom ? '' : 'hidden'}>
           </label>
           <div>
-            <label><span>${t('Handled by（拿取/处理商品的人，可多人）')}</span></label>
+            <label><span>${t('Handled by（拿取/处理商品的人，可多人）') + ' <b class="req">*</b>'}</span></label>
             <div class="participant-picker">
               <select id="draft-handled">
                 ${options.staff.filter((person) => person.active).map((person) => `<option value="staff:${person.id}">${esc(person.display_name)}${person.employee_code ? ` · ${esc(person.employee_code)}` : ''}</option>`).join('')}
@@ -1885,9 +1885,10 @@ async function viewAdjustmentForm(id = null) {
           ${id ? `<div id="existing-attachments">${attachmentListHtml(adjustment.attachments, true)}</div>` : ''}
         </div>
       </div>
-      <div class="section-heading adjustment-lines-heading"><div><h2>${t('调整商品')}</h2><p class="muted compact">${t('加入的商品会显示在这里；选择 − 或 +，再输入变化数量。')}</p></div>
+      <div class="section-heading adjustment-lines-heading"><div><h2>${t('调整商品')} <b class="req">*</b></h2><p class="muted compact">${t('加入的商品会显示在这里；选择 − 或 +，再输入变化数量。')}</p></div>
         <button id="draft-item-open" type="button">${t('添加商品')}</button></div>
       <div id="draft-lines"></div>
+      <div id="draft-errors"></div>
       <div class="form-actions"><a class="button secondary" href="${id ? `/adjustments/${id}` : '/adjustments'}" data-app-back>${t('取消')}</a><button id="save-draft">${t('保存 Draft')}</button></div>
     </div>`;
 
@@ -2167,12 +2168,23 @@ async function viewAdjustmentForm(id = null) {
   };
   $('#save-draft').onclick = async (event) => {
     const recordedValue = $('#draft-recorded').value;
-    if (!recordedValue) {
-      alert(t('请选择「Recorded by」实际做记录的员工。'));
-      return;
-    }
-    if (recordedValue === 'custom' && !$('#draft-recorded-custom').value.trim()) {
-      alert(t('请填写记录员工姓名。'));
+    const recordedBy = recordedValue === 'custom'
+      ? { name: $('#draft-recorded-custom').value.trim() }
+      : recordedValue ? { staffId: Number(recordedValue.replace('staff:', '')) } : null;
+    // Everything missing is listed together, so nobody has to fix one field,
+    // press save, and discover the next one.
+    const missing = [
+      $('#draft-location').value ? '' : t('仓位 Location'),
+      $('#draft-reason').value ? '' : t('调整原因 Reason'),
+      recordedBy?.staffId || recordedBy?.name ? '' : t('记录员工 Recorded by'),
+      handledBy.length ? '' : t('经手员工 Handled by'),
+      lines.length ? '' : t('调整商品 Products'),
+    ].filter(Boolean);
+    $w('#draft-errors').innerHTML = missing.length
+      ? `<div class="notice form-errors"><strong>${t('还有必填项没有填：')}</strong>${missing.map(esc).join(listSep)}</div>`
+      : '';
+    if (missing.length) {
+      $('#draft-errors').scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
     event.target.disabled = true;
@@ -2181,9 +2193,7 @@ async function viewAdjustmentForm(id = null) {
         locationId: Number($('#draft-location').value),
         reasonId: Number($('#draft-reason').value),
         notes: $('#draft-notes').value,
-        recordedBy: $('#draft-recorded').value === 'custom'
-          ? { name: $('#draft-recorded-custom').value.trim() }
-          : { staffId: Number($('#draft-recorded').value.replace('staff:', '')) },
+        recordedBy,
         handledBy,
         lines: lines.map((line) => ({ itemId: line.itemId, delta: Number(line.delta) })),
       };

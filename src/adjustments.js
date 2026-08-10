@@ -893,6 +893,7 @@ export async function buildReversalDraft({ adjustmentId, staffId, recordedBy, ha
       notes: `Reversal of ${originalNumber}`,
       lines: lines.rows.map((line) => ({ itemId: line.item_id, delta: -line.delta })),
       ...people,
+      handledBy: people.handledBy?.length ? people.handledBy : [people.recordedBy].filter(Boolean),
     },
     staffId,
   });
@@ -925,7 +926,7 @@ export async function buildVirtualStockRevokeDraft({ entries, staffId, recordedB
         notes: `撤销虚拟库存：${rows.map((r) => `${r.sku || r.barcode || r.product_title} ${-r.virtual_qty}`).join('、')}`,
         lines: rows.map((r) => ({ itemId: r.item_id, delta: -r.virtual_qty })),
         recordedBy,
-        handledBy,
+        handledBy: handledBy.length ? handledBy : [recordedBy].filter(Boolean),
       },
       staffId,
     });
