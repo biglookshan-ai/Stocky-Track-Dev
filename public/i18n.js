@@ -62,6 +62,7 @@
     '草稿，尚未提交': 'draft, not submitted yet',
     '将生成一张数量相反的草稿单（合计 {delta}），用来抵消这张调整单。草稿不会立刻改变 Shopify，你可以先修改数量或删除某些商品，确认无误后再提交。': 'This creates a draft with the opposite quantities ({delta}) to cancel this adjustment out. The draft changes nothing in Shopify yet — you can edit quantities or remove products first, then submit it when it looks right.',
     '生成撤销单失败：{msg}': 'Could not create the undo adjustment: {msg}',
+    '改数量或删除商品只影响这张撤销单,原单不受影响。': ' Changing quantities or removing products here affects only this undo — the original is left as it is.',
 
     // ---- Lark notification settings ----
     'Lark 通知设置': 'Lark notifications',

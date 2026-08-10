@@ -203,3 +203,29 @@ test('switching off location removes it from both places', () => {
   assert.doesNotMatch(cardText(off), /CineGearPro Shop/);
   assert.doesNotMatch(cardText(off), /\*\*Location:\*\*/);
 });
+
+test('the undo card describes the undo itself, not the original', () => {
+  // The card announces a stock change, so the quantities must be the ones that
+  // just moved — the undo's own, negated ones — with the original only named.
+  const undo = {
+    ...ADJUSTMENT,
+    display_number: 'A0043-260810',
+    reversal_of: { id: 41, display_number: 'A0009-260808' },
+    lines: [{ ...ADJUSTMENT.lines[0], delta: -2, qty_before: 2, qty_after: 0 }],
+  };
+  const card = JSON.stringify(buildAdjustmentNotificationMessages(undo, {
+    settings: normalizeLarkSettings({}), appUrl: 'https://app.test',
+  }));
+  assert.match(card, /A0043/);
+  assert.match(card, /\*\*Undoes:\*\* \[A0009\]\(https:\/\/app\.test\/adjustments\/41\)/);
+  assert.match(card, /-2/);
+});
+
+test('an undo without a resolvable original still names it, unlinked', () => {
+  const undo = { ...ADJUSTMENT, reversal_of: { display_number: 'A0009-260808' } };
+  const card = JSON.stringify(buildAdjustmentNotificationMessages(undo, {
+    settings: normalizeLarkSettings({}), appUrl: 'https://app.test',
+  }));
+  assert.match(card, /\*\*Undoes:\*\* A0009/);
+  assert.doesNotMatch(card, /\[A0009\]/);
+});

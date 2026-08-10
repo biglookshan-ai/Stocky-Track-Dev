@@ -802,12 +802,31 @@ async function buildLarkPreview(settings) {
         delta: -1, qty_before: 4, qty_after: 3,
       }],
     };
+  // A genuine undo makes the best preview: real numbers, real link.
+  const realReversal = await q(
+    `SELECT id FROM adjustments
+     WHERE reversal_of_adjustment_id IS NOT NULL AND status='applied'
+     ORDER BY applied_at DESC NULLS LAST LIMIT 1`);
+  const reversalSample = realReversal.rowCount
+    ? await getAdjustment(realReversal.rows[0].id)
+    : null;
   return {
     messages: buildAdjustmentNotificationMessages(adjustment, { settings }),
     // Same adjustment shown as an undo and as a failure, so all three cards can
-    // be compared side by side without having to cause a real failure.
+    // be compared side by side without having to cause a real failure. A real
+    // undo is used when one exists; otherwise the quantities are negated, since
+    // an undo showing the ORIGINAL direction would misrepresent the card.
     reversal: buildAdjustmentNotificationMessages(
-      { ...adjustment, reversal_of: { display_number: 'A0009-260808' } },
+      reversalSample || {
+        ...adjustment,
+        reversal_of: { id: adjustment.id, display_number: 'A0009-260808' },
+        lines: (adjustment.lines || []).map((line) => ({
+          ...line,
+          delta: -Number(line.delta || 0),
+          qty_before: line.qty_after,
+          qty_after: line.qty_before,
+        })),
+      },
       { settings },
     ),
     failure: buildAdjustmentFailureMessage(adjustment, {

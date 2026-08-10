@@ -195,6 +195,9 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
   const undoes = adjustment.reversal_of
     ? shortAdjustmentNumber(adjustment.reversal_of)
     : '';
+  const undoesUrl = adjustment.reversal_of?.id
+    ? detailUrl({ id: adjustment.reversal_of.id }, options.appUrl || process.env.APP_URL)
+    : '';
   // A new adjustment is created against one location, so repeating it on every
   // product line is noise. Imported historical adjustments can still span
   // locations, and those keep the per-line label.
@@ -216,7 +219,9 @@ export function buildAdjustmentNotificationMessages(adjustment, options = {}) {
     // stated outright rather than left to be inferred from the note.
     ...(undoes ? [{
       charCount: undoes.length + 12,
-      elements: [markdownElement(`**Undoes:** ${markdown(undoes)}`)],
+      elements: [markdownElement(`**Undoes:** ${undoesUrl
+        ? `[${markdown(undoes)}](${undoesUrl})`
+        : markdown(undoes)}`)],
     }] : []),
     ...(settings.showReason ? [{
       charCount: markdown(adjustment.reason).length + 12,

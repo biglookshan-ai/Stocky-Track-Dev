@@ -1845,6 +1845,7 @@ async function viewAdjustmentForm(id = null) {
   app.innerHTML = `
     <div class="page-heading"><div><h1>${id ? t('编辑 {number}', { number: adjustmentNumber(adjustment.number, adjustment.display_number) }) : t('新建库存调整')}</h1>
       <p class="muted">${t('先保存 Draft；保存不会改变 Shopify 库存。')}</p></div></div>
+    ${adjustment?.reversal_of ? `<div class="notice"><strong>${t('这是一张撤销单。')}</strong>${t('它把 {number} 的调整数量原样反向抵消。', { number: `<a href="/adjustments/${adjustment.reversal_of.id}">${esc(adjustmentNumber(adjustment.reversal_of.number, adjustment.reversal_of.display_number))}</a>` })}${t('改数量或删除商品只影响这张撤销单,原单不受影响。')}</div>` : ''}
     <div class="card adjustment-form">
       <div class="form-grid adjustment-basics">
         <label><span>Location</span><select id="draft-location">${options.locations.map((location) => `<option value="${location.id}" ${Number(adjustment?.lines?.[0]?.location_id) === location.id ? 'selected' : ''}>${esc(location.name)}</option>`).join('')}</select></label>
