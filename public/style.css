@@ -608,3 +608,11 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .lark-variant .active-toggle { margin-top: 7px; }
 .lark-preview-group + .lark-preview-group { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .lark-preview-group h3 { margin: 0 0 8px; font-size: var(--fs-sm); color: var(--sub); font-weight: var(--fw-medium); }
+
+/* Rarely-used destructive-ish action: present, but not competing with the
+   actions people take every day. */
+.button.quiet, button.quiet {
+  background: transparent; border-color: transparent; color: var(--sub);
+  font-size: var(--fs-sm); padding: 8px 10px;
+}
+.button.quiet:hover, button.quiet:hover { color: var(--text); background: var(--bg); }

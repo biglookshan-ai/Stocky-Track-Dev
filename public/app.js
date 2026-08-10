@@ -2221,7 +2221,7 @@ async function viewAdjustment(id) {
       <div class="button-group">${adjustment.status === 'draft' ? `<a class="button secondary" href="/adjustments/${id}/edit">${t('编辑 Draft')}</a>` : ''}
         ${canApply ? `<button id="apply-adjustment">${adjustment.status === 'applying' ? t('安全重试提交') : t('提交到 Shopify')}</button>` : ''}
         ${canApply ? `<label class="notify-toggle" title="${t('取消勾选后只调整 Shopify，不发送 Lark 群通知')}"><input type="checkbox" id="notify-lark" checked><span>${t('通知')}</span></label>` : ''}
-        ${adjustment.status === 'applied' && !adjustment.reversed_by?.length && !adjustment.reversal_of ? `<button id="reverse-adjustment" class="secondary">${t('撤销这张调整单')}</button>` : ''}
+        ${adjustment.status === 'applied' && !adjustment.reversed_by?.length && !adjustment.reversal_of ? `<button id="reverse-adjustment" class="quiet">${t('撤销这张调整单')}</button>` : ''}
         ${['draft', 'applied'].includes(adjustment.status) ? `<button id="archive-adjustment" class="secondary">${t('归档')}</button>` : ''}
       </div></div>
     ${adjustment.reversal_of ? `<div class="notice"><strong>${t('这是一张撤销单。')}</strong>${t('它把 {number} 的调整数量原样反向抵消。', { number: `<a href="/adjustments/${adjustment.reversal_of.id}">${esc(adjustmentNumber(adjustment.reversal_of.number, adjustment.reversal_of.display_number))}</a>` })}</div>` : ''}
