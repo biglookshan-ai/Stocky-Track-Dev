@@ -33,6 +33,7 @@ import {
   listVirtualStock,
   virtualStockLocations,
   buildVirtualStockRevokeDraft,
+  buildReversalDraft,
   listAdjustmentOptions,
   listAdjustments,
   saveAdjustmentDraft,
@@ -655,6 +656,20 @@ api.put('/adjustments/:id', async (req, res) => {
     });
     res.json({ id, adjustment: await getAdjustment(id) });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+api.post('/adjustments/:id/reverse', async (req, res) => {
+  try {
+    const id = await buildReversalDraft({
+      adjustmentId: req.params.id,
+      staffId: res.locals.staffId || null,
+      recordedBy: req.body?.recordedBy,
+      handledBy: req.body?.handledBy || [],
+    });
+    res.status(201).json({ id });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 api.post('/adjustments/:id/apply', async (req, res) => {

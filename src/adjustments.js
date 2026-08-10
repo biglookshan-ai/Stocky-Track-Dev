@@ -407,6 +407,16 @@ export async function getAdjustment(id) {
       [adjustmentId]),
   ]);
   if (!header.rowCount) return null;
+  // Reversal links both ways: what this adjustment reverses, and what reverses it.
+  const [reversalOf, reversedBy] = await Promise.all([
+    header.rows[0].reversal_of_adjustment_id
+      ? q('SELECT id, number, display_number, status FROM adjustments WHERE id=$1',
+        [header.rows[0].reversal_of_adjustment_id])
+      : { rows: [] },
+    q(`SELECT id, number, display_number, status FROM adjustments
+       WHERE reversal_of_adjustment_id=$1 AND status <> 'archived' ORDER BY id`,
+      [adjustmentId]),
+  ]);
   const people = participants.rows;
   return {
     ...header.rows[0],
@@ -414,6 +424,8 @@ export async function getAdjustment(id) {
     handled_by: people.filter((person) => person.role === 'handled_by'),
     lines: lines.rows,
     attachments,
+    reversal_of: reversalOf.rows[0] || null,
+    reversed_by: reversedBy.rows,
   };
 }
 
@@ -805,6 +817,80 @@ export async function listVirtualStock({ term = '', locationId = null } = {}) {
 }
 
 // Build a draft that reverses the outstanding virtual quantity. A draft (not a
+export const REVERSAL_REASON = 'Reversal';
+
+// One-click reversal: build an editable DRAFT whose lines negate an applied
+// adjustment, linked to the original so it shows as reversed and a second
+// reversal is blocked. Nothing touches Shopify until the draft is submitted.
+export async function buildReversalDraft({ adjustmentId, staffId, recordedBy, handledBy = [] }) {
+  const id = Number(adjustmentId);
+  const header = await q(
+    `SELECT a.id, a.status, a.display_number, a.number FROM adjustments a WHERE a.id=$1`, [id]);
+  if (!header.rowCount) throw new Error('调整单不存在');
+  const original = header.rows[0];
+  if (original.status !== 'applied') throw new Error('只有已提交的调整单可以撤销');
+  const existing = await q(
+    `SELECT id, display_number, status FROM adjustments
+     WHERE reversal_of_adjustment_id=$1 AND status <> 'archived' ORDER BY id LIMIT 1`, [id]);
+  if (existing.rowCount) {
+    const found = existing.rows[0];
+    throw new Error(`该调整单已有撤销单 ${found.display_number || `#${found.id}`}，请先处理或归档它`);
+  }
+  const lines = await q(
+    `SELECT al.item_id, al.location_id, al.delta, i.status AS item_status,
+            i.product_title, i.barcode, i.sku
+     FROM adjustment_lines al JOIN items i ON i.id=al.item_id
+     WHERE al.adjustment_id=$1 ORDER BY al.id`, [id]);
+  if (!lines.rowCount) throw new Error('原调整单没有商品明细，无法撤销');
+  const dead = lines.rows.filter((line) => line.item_status === 'deleted');
+  if (dead.length) {
+    const names = dead.map((line) => line.product_title || line.barcode || line.sku).join('、');
+    throw new Error(`原单包含已从 Shopify 删除的商品（${names}），无法生成撤销单`);
+  }
+  let reason = await q(
+    `SELECT id FROM adjustment_reasons WHERE name=$1`, [REVERSAL_REASON]);
+  if (!reason.rowCount) {
+    reason = await q(
+      `INSERT INTO adjustment_reasons (name, direction, active, position)
+       VALUES ($1, 'any', true, (SELECT COALESCE(max(position),0)+1 FROM adjustment_reasons))
+       RETURNING id`, [REVERSAL_REASON]);
+  } else {
+    await q(`UPDATE adjustment_reasons SET active=true, direction='any' WHERE id=$1`,
+      [reason.rows[0].id]);
+  }
+  const originalNumber = original.display_number
+    || `A${String(original.number).padStart(4, '0')}`;
+  // Default the people to whoever the original adjustment named — a better
+  // guess than the login account, and the draft is editable before submitting.
+  let people = { recordedBy, handledBy };
+  if (!recordedBy) {
+    const previous = await q(
+      `SELECT role, staff_id, display_name_snapshot AS name
+       FROM adjustment_participants WHERE adjustment_id=$1`, [id]);
+    const recorded = previous.rows.find((row) => row.role === 'recorded_by');
+    people = {
+      recordedBy: recorded ? { staffId: recorded.staff_id, name: recorded.name } : null,
+      handledBy: handledBy.length
+        ? handledBy
+        : previous.rows.filter((row) => row.role === 'handled_by')
+          .map((row) => ({ staffId: row.staff_id, name: row.name })),
+    };
+  }
+  const draftId = await saveAdjustmentDraft({
+    input: {
+      locationId: lines.rows[0].location_id,
+      reasonId: reason.rows[0].id,
+      notes: `Reversal of ${originalNumber}`,
+      lines: lines.rows.map((line) => ({ itemId: line.item_id, delta: -line.delta })),
+      ...people,
+    },
+    staffId,
+  });
+  await q('UPDATE adjustments SET reversal_of_adjustment_id=$2, updated_at=now() WHERE id=$1',
+    [draftId, id]);
+  return draftId;
+}
+
 // direct write) keeps the existing review-then-apply safeguard.
 export async function buildVirtualStockRevokeDraft({ entries, staffId, recordedBy, handledBy = [] }) {
   if (!Array.isArray(entries) || !entries.length) throw new Error('请选择要撤销的虚拟库存');

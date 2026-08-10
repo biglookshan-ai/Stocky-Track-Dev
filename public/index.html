@@ -1,33 +1,35 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="shopify-api-key" content="%%API_KEY%%">
   <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
   <title>CGP Inventory</title>
-  <link rel="stylesheet" href="/style.css?v=20260804-lark-notify-option">
+  <link rel="stylesheet" href="/style.css?v=20260810-i18n">
 </head>
 <body>
   <header class="topbar">
-    <div class="nav-history-controls" aria-label="页面历史">
-      <button id="app-back" class="secondary" type="button" aria-label="返回上一级" title="返回上一级">←</button>
+    <div class="nav-history-controls" aria-label="页面历史" data-i18n-title>
+      <button id="app-back" class="secondary" type="button" aria-label="返回上一级" title="返回上一级" data-i18n-title>←</button>
     </div>
     <nav>
-      <a href="/dashboard" data-nav="dashboard">首页</a>
-      <a href="/adjustments" data-nav="adjustments">手动调整</a>
-      <a href="/history" data-nav="history">库存历史</a>
-      <a href="/items" data-nav="items">产品列表</a>
+      <a href="/dashboard" data-nav="dashboard" data-i18n>首页</a>
+      <a href="/adjustments" data-nav="adjustments" data-i18n>手动调整</a>
+      <a href="/history" data-nav="history" data-i18n>库存历史</a>
+      <a href="/items" data-nav="items" data-i18n>产品列表</a>
     </nav>
     <form id="global-search" class="global-search" role="search">
       <input id="global-search-input" type="search" maxlength="120"
-        placeholder="搜索 Barcode、商品、人员、订单或调整编号">
-      <button class="secondary small-button" type="submit">搜索</button>
+        placeholder="搜索 Barcode、商品、人员、订单或调整编号" data-i18n-placeholder>
+      <button class="secondary small-button" type="submit" data-i18n>搜索</button>
     </form>
+    <button id="lang-toggle" class="secondary small-button" type="button"></button>
   </header>
-  <main id="app"><div class="card">加载中…</div></main>
+  <main id="app"><div class="card" data-i18n>加载中…</div></main>
   <script src="/session-client.js"></script>
+  <script src="/i18n.js?v=20260810-i18n"></script>
   <script src="/navigation.js?v=20260803-back-only"></script>
-  <script src="/app.js?v=20260804-lark-notify-option"></script>
+  <script src="/app.js?v=20260810-i18n"></script>
 </body>
 </html>
