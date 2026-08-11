@@ -229,3 +229,15 @@ test('an undo without a resolvable original still names it, unlinked', () => {
   assert.match(card, /\*\*Undoes:\*\* A0009/);
   assert.doesNotMatch(card, /\[A0009\]/);
 });
+
+test('the applied card stays green no matter how it is previewed', () => {
+  // The preview picks a real adjustment as its sample; if that sample happened
+  // to be an undo, the 'applied' card rendered orange and looked like a
+  // regression. Clearing the link is what the preview does, so assert it works.
+  const undo = { ...ADJUSTMENT, reversal_of: { id: 41, display_number: 'A0014-260811' } };
+  const [asApplied] = buildAdjustmentNotificationMessages(
+    { ...undo, reversal_of: null }, { settings: normalizeLarkSettings({}) },
+  );
+  assert.equal(asApplied.card.header.template, 'green');
+  assert.match(asApplied.card.header.title.content, /Stock adjustment applied/);
+});

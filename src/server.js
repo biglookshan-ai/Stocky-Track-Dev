@@ -774,11 +774,14 @@ async function buildLarkPreview(settings) {
   // Most adjustments cover several products, and the layout only really shows
   // itself with more than one line — so prefer a recent multi-product one, and
   // fall back to any applied adjustment, then to a two-product sample.
+  // Must not be an undo itself: the card renders by what the adjustment IS, so
+  // an undo picked as the 'applied' sample would preview orange and read as if
+  // the success card had changed colour.
   const recent = await q(
     `SELECT a.id
      FROM adjustments a
      JOIN adjustment_lines al ON al.adjustment_id = a.id
-     WHERE a.status='applied'
+     WHERE a.status='applied' AND a.reversal_of_adjustment_id IS NULL
      GROUP BY a.id, a.applied_at
      ORDER BY (count(al.id) > 1) DESC, a.applied_at DESC NULLS LAST
      LIMIT 1`);
@@ -811,7 +814,7 @@ async function buildLarkPreview(settings) {
     ? await getAdjustment(realReversal.rows[0].id)
     : null;
   return {
-    messages: buildAdjustmentNotificationMessages(adjustment, { settings }),
+    messages: buildAdjustmentNotificationMessages({ ...adjustment, reversal_of: null }, { settings }),
     // Same adjustment shown as an undo and as a failure, so all three cards can
     // be compared side by side without having to cause a real failure. A real
     // undo is used when one exists; otherwise the quantities are negated, since
