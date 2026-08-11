@@ -178,6 +178,12 @@ const AWAITING_FORMAL_SQL = `
                 WHERE lg.event_id=e.id AND lg.attribution <> 'stale')`;
 
 // ---- Health (public, for Railway + monitoring) ----
+// Which build is actually serving. A migration that fails takes the boot down,
+// and Railway keeps the previous container answering — so a green /healthz on
+// its own does NOT mean the latest push is live. Compare this against the
+// commit you pushed.
+const BUILD_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'unknown';
+
 app.get('/healthz', async (req, res) => {
   try {
     const [webhooks, pending, latestFormal, snap, historySync, historyBackfill, stockyImport, stkAdj] = await Promise.all([
@@ -198,8 +204,11 @@ app.get('/healthz', async (req, res) => {
                   (SELECT 1 FROM adjustment_lines al WHERE al.adjustment_id=a.id))::int empty
          FROM adjustments a WHERE display_number LIKE 'STK-%'`),
     ]);
+    const applied = await q('SELECT count(*)::int AS n, max(filename) AS latest FROM schema_migrations');
     res.json({
       ok: true,
+      build: BUILD_COMMIT,
+      migrations: applied.rows[0],
       stkAdjustments: stkAdj.rows[0],
       stockyImportVersion: (stockyImport || {}).version || null,
       webhookBacklog: webhooks.rows[0].backlog,

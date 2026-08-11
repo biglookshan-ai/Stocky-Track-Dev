@@ -1,23 +1,15 @@
--- 019 matched reason names after stripping the +/- direction prefix, but the
--- stored name is '-Resend order' while the agreed list writes 'Re-send order'.
--- The hyphen made them different strings, so that reason was switched off by
--- mistake. Matching now also ignores hyphens and spaces, so both spellings —
--- and any future 'Manual  invoice' style typo — land on the same key.
+-- 019 matched names literally, so the stored '-Resend order' never matched the
+-- written 'Re-send order' and was switched off by mistake.
+--
+-- Normalising with plain replace() rather than a regex bracket expression:
+-- '[\s-]' expands \s to a character class and the trailing '-' can then be read
+-- as a range start, which errors — and a failing migration takes the whole boot
+-- down. Stripping '+', '-' and spaces covers every direction prefix anyway.
 UPDATE adjustment_reasons
 SET active = (
-  regexp_replace(
-    lower(btrim(regexp_replace(name, '^[+-]\s*', ''))),
-    '[\s-]', '', 'g'
-  ) IN (
-    'manualadjustment',
-    'manualinvoice',
-    'manualstockcount',
-    'virtualstockadjustment',
-    'demo',
-    'returnrestock',
-    'staffpurchase',
-    'damaged',
-    'resendorder',
-    'reversal'
+  replace(replace(replace(lower(btrim(name)), '+', ''), '-', ''), ' ', '') IN (
+    'manualadjustment', 'manualinvoice', 'manualstockcount',
+    'virtualstockadjustment', 'demo', 'returnrestock',
+    'staffpurchase', 'damaged', 'resendorder', 'reversal'
   )
 );
