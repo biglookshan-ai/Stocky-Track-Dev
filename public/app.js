@@ -1413,6 +1413,9 @@ async function viewItem(id, params = routeParams()) {
 async function viewSystem() {
   app.innerHTML = `<div class="card">${t('加载中…')}</div>`;
   const status = await api('/status');
+  const versionLine = status.version
+    ? `<p class="muted small version-line">${t('当前版本 v{v}', { v: esc(status.version) })}</p>`
+    : '';
   const pct = backfillPercent(status.historyBackfill);
   const historyState = status.historyBackfill?.running
     ? { value: `${pct || '…'}%`, hint: `${t('已读取 {n} 行', { n: status.historyBackfill.fetched || 0 })}${status.historyBackfill.cursor ? t('，已回填到 {date}', { date: fmtDate(status.historyBackfill.cursor) }) : ''}`, className: '' }
@@ -1440,7 +1443,8 @@ async function viewSystem() {
         <div><strong>${t('修改记录')}</strong><p>${t('来自 Shopify Adjustment history、实时库存事件和本应用已提交的调整单；操作人和关联单据会随后自动补全。')}</p></div>
         <div><strong>${t('每日快照')}</strong><p>${t('只刷新当前库存基准并保存趋势检查点，不虚构操作人、原因或业务单据。')}</p></div>
       </div>
-    </div>`;
+    </div>
+    ${versionLine}`;
 }
 
 async function viewHistory(params = routeParams()) {

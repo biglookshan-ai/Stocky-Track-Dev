@@ -135,6 +135,8 @@
     '调整商品 Products': 'Products',
     '请先填写：{fields}': 'Please fill in: {fields}',
 
+    '当前版本 v{v}': 'Version v{v}',
+
     // ---- status help tooltips ----
     '修改记录只显示 Shopify 官方流水中的正式记录（含操作人/App/原因/单据）。这里是数量已变动、但官方流水还没回传的笔数——通常几分钟内回传并自动入账，期间不会显示任何不完整的记录。': "Change records only show entries confirmed in Shopify's official history (with the person/app, reason and document). This number counts quantity changes still waiting for that official record — it usually arrives within minutes and posts automatically, and nothing incomplete is shown in the meantime.",
     '库存数字是实时的（变动信号一到就更新）。这里显示的是每天凌晨把全店所有商品与 Shopify 逐一核对的完成时间，是二次保险，不代表数字停留在该时刻。': 'Stock numbers are live (they update the moment a change signal arrives). This shows when the overnight full check against Shopify last finished — a second safety net, not the time the numbers are from.',

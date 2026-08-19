@@ -625,3 +625,4 @@ details.product-expand ul.product-lines li { margin-bottom: 3px; line-height: 1.
 .page-footer-actions:empty { display: none; }
 .req { color: var(--red); font-weight: var(--fw-medium); }
 .form-errors { border-color: #f0c8c0; background: #fdf3f1; margin-bottom: 12px; }
+.version-line { text-align: center; color: var(--sub); margin: 18px 0 4px; }

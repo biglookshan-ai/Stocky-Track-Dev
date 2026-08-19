@@ -183,6 +183,9 @@ const AWAITING_FORMAL_SQL = `
 // its own does NOT mean the latest push is live. Compare this against the
 // commit you pushed.
 const BUILD_COMMIT = (process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 7) || 'unknown';
+// Released version, shown in the app so a feedback round can be tied to a
+// build rather than to "some time in August".
+const APP_VERSION = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 
 app.get('/healthz', async (req, res) => {
   try {
@@ -207,6 +210,7 @@ app.get('/healthz', async (req, res) => {
     const applied = await q('SELECT count(*)::int AS n, max(filename) AS latest FROM schema_migrations');
     res.json({
       ok: true,
+      version: APP_VERSION,
       build: BUILD_COMMIT,
       migrations: applied.rows[0],
       stkAdjustments: stkAdj.rows[0],
@@ -312,6 +316,7 @@ api.get('/status', async (req, res) => {
       continueHistoryBackfill({ shop: req.ctx.shop, token: req.ctx.token });
     }
     res.json({
+      version: APP_VERSION,
       items: items.rows[0],
       events: events.rows[0],
       ledger: ledger.rows[0],
