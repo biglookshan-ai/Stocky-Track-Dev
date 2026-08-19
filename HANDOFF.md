@@ -323,23 +323,24 @@ Activity 保留 Shopify 英文命名，例如：
 
 ### 4.2 尚未上线
 
-以下有些已有数据库表，但没有完整业务模块或 UI：
+本节在 2026-08-19 复核过。以下功能**已经上线**，早期版本的本文档曾把它们列为未完成：
 
-- 中英文界面切换（默认中文的 i18n）；
-- Stocky CSV 历史导入；
-- 轻量盘点；
+- 中英文界面切换（`public/i18n.js`，默认**英文**，每人浏览器各自记住）；
+- Stocky CSV 历史导入（`src/import-stocky.js`，2208 张旧单已导入）；
+- 虚拟库存页面（`/virtual-stock`，口径 = External Warehouse 当前有库存）；
+- Lark 群通知（`src/lark-adjustment-notifier.js` + 应用内设置页 `/lark-settings`）；
+- 一键撤销调整单（迁移 014，`buildReversalDraft`）。
+
+真正**尚未上线**的（表存在不等于功能存在）：
+
+- 轻量盘点——`stocktakes` / `stocktake_lines` 表已建，除 `src/ledger.js` 的一处引用外无业务代码、无 UI。目前的 `Stocktake` 只是手动调整的一个原因，不是盘点流程；
+- Bundle / BOM 组装拆散——`bundle_components` 表**完全没有代码引用**。相关已知问题：套装售出时组件的扣减不计入组件自身销量（见 PROGRESS「等用户决策」）；
 - 本地 `#` 产品完整工作流；
-- Bundle / BOM 组装拆散；
-- 虚拟库存完整页面；
-- Low stock 仪表盘；
-- Lost revenue 仪表盘；
-- Best sellers / ABC；
-- 自动补货规则和补货建议；
-- 库存估值报表；
-- Lark 通知；
+- 自动补货规则与补货建议；
+- Low stock / Lost revenue / Best sellers / ABC / 库存估值报表；
 - BIS 缺货需求联动。
 
-不能因为 `migrations/001_init.sql` 已经存在 `virtual_stock`、`stocktakes`、`bundle_components` 表，就声称这些功能已经完成。
+不能因为 `migrations/001_init.sql` 已经存在某张表，就声称对应功能已经完成。
 
 ---
 
